@@ -36,7 +36,7 @@ def api_endpoint(path):
   return f"{api_base}{path}"
 
 def error_log(*args, **kwargs):
-  error_log(*args, **kwargs)
+  print(*args, **kwargs, file=sys.stderr)
   return 1
 
 def stdin_available(timeout=1):
@@ -290,11 +290,7 @@ def command_import(args, tasks):
 
 def command_dry(args, tasks):
   """ Run the dry command. """
-  # TODO: Implement mock patching of requests, as to always return 200.
-  logging.debug("Dry run triggered (noop).")
-  for task in tasks:
-    logging.info(f"Processing task {task.get('id')}.")
-  return 0
+  raise NotImplementedError("command_dry has not yet been implemented")
 
 def prepare_args():
   """ Prepare and parse arguments for the program. """
@@ -405,6 +401,8 @@ if __name__ == "__main__":
   e = 1
   try:
     e = main()
+  except NotImplementedError as exc:
+    print(f"error: {exc}")
   except Exception as exc:
     traceback.print_exc() 
   sys.exit(e)
