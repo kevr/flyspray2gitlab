@@ -13,7 +13,6 @@ import pymysql.cursors
 import json
 import argparse
 import traceback
-import requests
 import re
 from signal import signal, SIGPIPE, SIG_DFL
 
@@ -266,7 +265,9 @@ def get_target(database, prefix, table, *args):
 
 def main():
   """ Main entry point. """
-  parser = argparse.ArgumentParser()
+  parser = argparse.ArgumentParser(
+      formatter_class=lambda prog: argparse.RawTextHelpFormatter(
+        prog, max_help_position=80))
   parser.add_argument("--host", dest="host", default="localhost",
       help="mysql server host (default: 'localhost')")
   parser.add_argument("--port", dest="port", default=3306, type=int,
