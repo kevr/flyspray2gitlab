@@ -7,6 +7,9 @@
 # TODO: Add extensive formatting options to allow a user to specify
 # formatting for bug task imports.
 #
+# TODO: Add a rollback feature which runs when an import fails due
+# to an exception.
+#
 # License: MIT
 #
 # Contributions:
@@ -22,7 +25,6 @@ import select
 import requests
 import pytz
 import urllib
-import re
 from datetime import datetime
 from signal import signal, SIGPIPE, SIG_DFL
 from prettytable import PrettyTable
@@ -314,7 +316,13 @@ Note: This program reads stdin as input for flyspray json data.
 """
 
   parser = argparse.ArgumentParser(
-      formatter_class=argparse.RawDescriptionHelpFormatter, epilog=epilog)
+      formatter_class=lambda prog: argparse.RawTextHelpFormatter(
+        prog, max_help_position=80),
+      usage="%(prog)s [-hv] [--skip-attachments] [-btmdua ARG]",
+      epilog=epilog)
+
+  parser.add_argument("-v", "--verbose", default=False, const=True,
+      action="store_const", help="enable debug logging")
   parser.add_argument("-b", "--base", default="http://gitlab.local.net",
       help="GitLab base URL (default: 'http://gitlab.local.net')")
   parser.add_argument("-t", "--token", required=True,
@@ -324,8 +332,6 @@ Note: This program reads stdin as input for flyspray json data.
            "(default: 'projects.map.json')")
   parser.add_argument("-d", "--default-target", dest="default_target",
       required=True, help="default repository used as the import destination")
-  parser.add_argument("-v", "--verbose", default=False, const=True,
-      action="store_const", help="enable debug logging")
   parser.add_argument("-u", "--upstream", default="https://bugs.archlinux.org",
       help="Flyspray upstream base URL")
   parser.add_argument("-a", "--attachments", default='', required=True,
