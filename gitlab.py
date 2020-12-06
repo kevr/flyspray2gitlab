@@ -127,11 +127,18 @@ def markdown_table(raw_table):
   table_str = raw_table.get_string()
   return table_str[table_str.index('\n') + 1 : table_str.rindex('\n')]
 
-def task_to_issue(task, attachments):
+def get_if(fn, a, b):
+  if fn():
+    return a
+  return b
+
+def task_to_issue(args, task, attachments):
   user = task.get("opened_by")
 
-  opened_by = f"[{user.get('real_name')} " + \
-      f"({user.get('user_name')})]({upstream}/user/{user.get('id')})"
+  opened_by = get_if(lambda: args.upstream,
+      f"[{user.get('real_name')} ({user.get('user_name')})]" \
+      f"({args.upstream}/user/{user.get('id')})",
+      f"{user.get('real_name')} ({user.get('user_name')})")
 
   header = ["Task Info (Flyspray)", ""]
   rows = [
@@ -163,14 +170,17 @@ def task_to_issue(task, attachments):
 {attachments_markdown(attachments)}
 """
 
-def comment_to_note(comment, attachments):
+def comment_to_note(args, comment, attachments):
   # Links back to the user in this string may not always work. Flyspray
   # does not by default allow all users to be viewed via /user/{id} like
   # bugs.archlinux.org does.
   user = comment.get("user")
+  commented_by = get_if(lambda: args.upstream,
+      f"[{user.get('real_name')} ({user.get('user_name')})]" \
+      f"({args.upstream}/user/{user.get('id')})",
+      f"{user.get('real_name')} ({user.get('user_name')})")
   return f"""\
-<small>Commented by [{user.get("real_name")} \
-({user.get("user_name")})]({upstream}/user/{user.get('id')})</small>
+<small>Commented by {commented_by}</small>
 
 {comment.get('comment_text')}
 
@@ -227,7 +237,7 @@ def import_task(args, task, mappings):
   response = requests.post(issues_endpoint, json={
     "access_token": args.token,
     "title": summary_to_title(task.get("summary")),
-    "description": task_to_issue(task, attachments),
+    "description": task_to_issue(args, task, attachments),
     "created_at": date_opened.isoformat(),
     "weight": task.get("priority_id")
   })
@@ -260,7 +270,7 @@ def import_task(args, task, mappings):
 
     response = requests.post(notes_endpoint, json={
       "access_token": args.token,
-      "body": comment_to_note(comment, attachments),
+      "body": comment_to_note(args, comment, attachments),
       "created_at": date_added.isoformat()
     })
 
@@ -328,8 +338,8 @@ Note: This program reads stdin as input for flyspray json data.
            "(default: 'projects.map.json')")
   parser.add_argument("-d", "--default-target", dest="default_target",
       required=True, help="default repository used as the import destination")
-  parser.add_argument("-u", "--upstream", default="https://bugs.archlinux.org",
-      help="Flyspray upstream base URL")
+  parser.add_argument("-u", "--upstream",
+      help="originating Flyspray server's base URL")
   parser.add_argument("-a", "--attachments", default='', required=True,
       help="path to Flyspray attachments directory")
   parser.add_argument("--api", default="v4",
