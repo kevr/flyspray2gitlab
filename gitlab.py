@@ -312,25 +312,17 @@ def rollback(args):
 
   global tasks
 
-  # Get current user data.
-  data = requests.get(f"{args.base}/api/{args.api}/user").json()
-  is_admin = data.get("is_admin", False)
-
-  if is_admin:
-    # Delete issue
-    pass
-  else:
-    # Close issue
-    for issue_id, repo in tasks:
-      issue_endpoint = \
-        f"{args.base}/api/{args.api}/projects/{repo}/issues/{issue_id}"
-      response = requests.put(issue_endpoint, json={
-        "access_token": args.token,
-        "state_event": "close"
-      })
-      if response.status_code != 200:
-        raise requests.HTTPError(
-            f"GitLab API returned '{response.status_code}'.")
+  # Close issue
+  for issue_id, repo in tasks:
+    issue_endpoint = \
+      f"{args.base}/api/{args.api}/projects/{repo}/issues/{issue_id}"
+    response = requests.put(issue_endpoint, json={
+      "access_token": args.token,
+      "state_event": "close"
+    })
+    if response.status_code != 200:
+      raise requests.HTTPError(
+          f"GitLab API returned '{response.status_code}'.")
 
   tasks.clear()
 
