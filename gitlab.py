@@ -30,10 +30,6 @@ from prettytable import PrettyTable
 api_base = None
 tasks = []
 
-# Some variables used to maintain state during a dry run.
-g_project_id = 0
-g_project_set = dict()
-
 def api_endpoint(path):
   return '/'.join([ api_base, path ])
 
@@ -380,7 +376,16 @@ def command_dry(args, tasks):
     data.get(p) if p in data else args.default_target for p in projects
   ]
 
+  # Some variables used to maintain state during a dry run.
+  # Any nested functions that alter these values must declare
+  # them as nonlocal: `nonlocal c_project_id`.
+  c_project_id = 0
+  c_project_set = dict()
+
   def mock_requests(*route_args, **kwargs):
+    nonlocal c_project_id
+    nonlocal c_project_set
+
     rv = dict()
 
     user_ep = user_endpoint()
@@ -389,12 +394,11 @@ def command_dry(args, tasks):
     for mapping in mappings:
       repo = urllib.parse.quote_plus(mapping)
 
-      global g_project_id
-      if not repo in g_project_set:
-        g_project_id += 1
-        g_project_set[repo] = g_project_id
+      if not repo in c_project_set:
+        c_project_id += 1
+        c_project_set[repo] = c_project_id
 
-      project_id = g_project_set.get(repo)
+      project_id = c_project_set.get(repo)
       project_ep = project_endpoint(repo)
       if not project_ep in rv:
         rv[project_ep] = MockResponse({ "id": project_id })
