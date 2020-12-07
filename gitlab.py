@@ -22,12 +22,17 @@ import select
 import requests
 import pytz
 import urllib
+from unittest import mock
 from datetime import datetime
 from signal import signal, SIGPIPE, SIG_DFL
 from prettytable import PrettyTable
 
 api_base = None
 tasks = []
+
+# Some variables used to maintain state during a dry run.
+g_project_id = 0
+g_project_set = dict()
 
 def api_endpoint(path):
   return '/'.join([ api_base, path ])
@@ -41,8 +46,20 @@ def stdin_available(timeout=1):
   result = select.select([sys.stdin.fileno()], [], [], timeout)
   return result == ([sys.stdin.fileno()], [], [])
 
-def summary_to_title(summary):
-  return summary
+def module_method(command):
+  """ Return corresponding module method in this file for command. """
+  method_string = f"command_{command}"
+  if not method_string in globals():
+    # Print out the error string, then return a stub function that
+    # just returns 2. In short: this function can be checked against
+    # 0 (success) to probe for program failure.
+    print(f"error: invalid command '{command}', see --help")
+    return lambda args: 2
+  return globals().get(method_string)
+
+def small_wrap(content):
+  """ Wrap content in <small> tags. """
+  return f"<small>{content}</small>"
 
 def attachment_markdown(upload_result):
   """ Generate markdown for an attachment upload result. """
@@ -103,10 +120,6 @@ def upload_attachments(args, repository, attachments, root):
   """ Upload a list of attachments. """
   return [ upload_attachment(args, repository, a, root) for a in attachments ]
 
-def small_wrap(content):
-  """ Wrap content in <small> tags. """
-  return f"<small>{content}</small>"
-
 def raw_markdown_table(header, rows):
   """ Produce a PrettyTable for the given header and rows. """
   rows = [
@@ -125,9 +138,7 @@ def markdown_table(raw_table):
   return table_str[table_str.index('\n') + 1 : table_str.rindex('\n')]
 
 def get_if(fn, a, b):
-  if fn():
-    return a
-  return b
+  return a if fn() else b
 
 def task_to_issue(args, task, attachments):
   user = task.get("opened_by")
@@ -184,16 +195,6 @@ def comment_to_note(args, comment, attachments):
 {attachments_markdown(attachments)}
 """
 
-def module_method(command):
-  method_string = f"command_{command}"
-  if not method_string in globals():
-    # Print out the error string, then return a stub function that
-    # just returns 2. In short: this function can be checked against
-    # 0 (success) to probe for program failure.
-    print(f"error: invalid command '{command}', see --help")
-    return lambda args: 2
-  return globals().get(method_string)
-
 def import_task(args, task, mappings):
   """ Import a single task dictionary to GitLab (provided by flyspray.py).
 
@@ -239,7 +240,7 @@ def import_task(args, task, mappings):
 
   response = requests.post(issues_endpoint, json={
     "access_token": args.token,
-    "title": summary_to_title(task.get("summary")),
+    "title": task.get("summary"),
     "description": task_to_issue(args, task, attachments),
     "created_at": date_opened.isoformat(),
     "weight": task.get("priority_id")
@@ -319,7 +320,6 @@ def rollback(args):
 
   tasks.clear()
 
-# import command handler.
 def command_import(args, tasks):
   """ Run the import command. """
   logging.debug("Import triggered.")
@@ -350,8 +350,6 @@ class MockResponse:
 
 def command_dry(args, tasks):
   """ Run the dry command. """
-  from unittest import mock
-
   projects = [ task["project"] for task in tasks ]
 
   data = dict()
@@ -391,9 +389,12 @@ def command_dry(args, tasks):
     for mapping in mappings:
       repo = urllib.parse.quote_plus(mapping)
 
-      # Mock return for this mapping's /project/:id endpoint.
-      project_id = 1
+      global g_project_id
+      if not repo in g_project_set:
+        g_project_id += 1
+        g_project_set[repo] = g_project_id
 
+      project_id = g_project_set.get(repo)
       project_ep = project_endpoint(repo)
       if not project_ep in rv:
         rv[project_ep] = MockResponse({ "id": project_id })
@@ -402,9 +403,10 @@ def command_dry(args, tasks):
       if not upload_ep in rv:
         rv[upload_ep] = MockResponse({ "full_path": "/uploads/mocked/path" })
 
+      # We don't really double check the issue id we get back
+      # during an import, so just stub them all out as id = 1.
       issue_id = 1
       issues_ep = issues_endpoint(repo)
-
       if not issues_ep in rv:
         rv[issues_ep] = MockResponse({ "iid": issue_id })
 
