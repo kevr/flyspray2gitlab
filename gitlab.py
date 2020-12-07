@@ -37,6 +37,24 @@ g_project_set = dict()
 def api_endpoint(path):
   return '/'.join([ api_base, path ])
 
+def user_endpoint():
+  return '/'.join([ api_base, "user" ])
+
+def project_endpoint(repo):
+  return '/'.join([ api_base, f"projects/{repo}" ])
+
+def upload_endpoint(repo):
+  return '/'.join([ project_endpoint(repo), "uploads" ])
+
+def issues_endpoint(repo):
+  return '/'.join([ project_endpoint(repo), "issues" ])
+
+def issue_endpoint(repo, issue):
+  return '/'.join([ issues_endpoint(repo), f"{issue}" ])
+
+def notes_endpoint(repo, issue):
+  return '/'.join([ issue_endpoint(repo, issue), "notes" ])
+
 def error_log(*args, **kwargs):
   print(*args, **kwargs, file=sys.stderr)
   return 1
@@ -100,15 +118,15 @@ def upload_attachment(args, repository, attachment, root):
   }
 
   # And use it to upload a new file to the designated project.
-  upload_endpoint = f"{api_base}/projects/{repository}/uploads"
+  upload_ep = upload_endpoint(repository)
   headers = {
     "Accept": "application/json",
     "Authorization": f"Bearer {args.token}"
   }
 
   logging.info("Uploading attachment " +
-      f"{attachment.get('attachment_id')} to {upload_endpoint}.")
-  response = requests.post(upload_endpoint, files=files, headers=headers)
+      f"{attachment.get('attachment_id')} to {upload_ep}.")
+  response = requests.post(upload_ep, files=files, headers=headers)
 
   if not response.status_code in (200, 201):
     raise requests.HTTPError(f"GitLab API returned '{response.status_code}'.")
@@ -223,8 +241,8 @@ def import_task(args, task, mappings):
   # Get repository ready to be used as :id in /project/:id.
   repository = urllib.parse.quote_plus(repository)
 
-  issues_endpoint = api_endpoint(f"projects/{repository}/issues")
-  logging.info(f"Migrating task {task.get('id')} to {issues_endpoint}.")
+  issues_ep = issues_endpoint(repository)
+  logging.info(f"Migrating task {task.get('id')} to {issues_ep}.")
 
   utc = pytz.timezone("UTC")
   date_opened = datetime.fromtimestamp(task["last_edited"], utc) \
@@ -238,7 +256,7 @@ def import_task(args, task, mappings):
         repository, attachments, args.attachments)
     logging.debug(f"Uploaded task attachments: {attachments}.")
 
-  response = requests.post(issues_endpoint, json={
+  response = requests.post(issues_ep, json={
     "access_token": args.token,
     "title": task.get("summary"),
     "description": task_to_issue(args, task, attachments),
@@ -254,12 +272,12 @@ def import_task(args, task, mappings):
   issue_id = data.get("iid")
   tasks.append((issue_id, repository))
 
-  issue_endpoint = f"{issues_endpoint}/{issue_id}"
-  notes_endpoint = f"{issue_endpoint}/notes"
+  issue_ep = issue_endpoint(repository, issue_id)
+  notes_ep = notes_endpoint(repository, issue_id)
 
   for comment in task["comments"]:
     logging.info(
-        f"Migrating comment {comment.get('comment_id')} to {notes_endpoint}.")
+        f"Migrating comment {comment.get('comment_id')} to {notes_ep}.")
 
     date_added = datetime.fromtimestamp(comment["last_edited_time"], utc) \
         if comment["last_edited_time"] > comment["date_added"] else \
@@ -274,7 +292,7 @@ def import_task(args, task, mappings):
     # At this point, attachments should be populated with any attachments
     # that were originally uploaded to Flyspray's comment.
 
-    response = requests.post(notes_endpoint, json={
+    response = requests.post(notes_ep, json={
       "access_token": args.token,
       "body": comment_to_note(args, comment, attachments),
       "created_at": date_added.isoformat()
@@ -285,7 +303,7 @@ def import_task(args, task, mappings):
           f"GitLab API returned '{response.status_code}'.")
 
   if task.get("closed"):
-    response = requests.put(issue_endpoint, json={
+    response = requests.put(issue_ep, json={
       "access_token": args.token,
       "state_event": "close"
     })
@@ -361,24 +379,6 @@ def command_dry(args, tasks):
   mappings = [
     data.get(p) if p in data else args.default_target for p in projects
   ]
-
-  def user_endpoint():
-    return '/'.join([api_base, "user"])
-
-  def project_endpoint(repo):
-    return '/'.join([api_base, f"projects/{repo}"])
-
-  def upload_endpoint(repo):
-    return '/'.join([project_endpoint(repo), "uploads"])
-
-  def issues_endpoint(repo):
-    return '/'.join([project_endpoint(repo), "issues"])
-
-  def issue_endpoint(repo, issue):
-    return '/'.join([issues_endpoint(repo), f"{issue}"])
-
-  def notes_endpoint(repo, issue):
-    return '/'.join([issue_endpoint(repo, issue), "notes"])
 
   def mock_requests(*route_args, **kwargs):
     rv = dict()
