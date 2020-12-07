@@ -471,7 +471,7 @@ Note: This program reads stdin as input for flyspray json data.
   parser = argparse.ArgumentParser(
       formatter_class=lambda prog: argparse.RawTextHelpFormatter(
         prog, max_help_position=80),
-      usage="%(prog)s [-hv] [--skip-attachments] [-btmdua ARG]",
+      usage="%(prog)s [-hv] [--skip-attachments] [-btmdua ARG] command",
       epilog=epilog)
 
   parser.add_argument("-v", "--verbose", default=False, const=True,

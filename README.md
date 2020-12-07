@@ -130,7 +130,7 @@ A script used to import JSON from flyspray<span>.</span>py into a GitLab server 
     * See [doc/projects.map.json.example](/doc/projects.map.json.example).
 
 ```
-usage: gitlab.py [-hv] [--skip-attachments] [-btmdua ARG]
+usage: gitlab.py [-hv] [--skip-attachments] [-btmdua ARG] command
 
 positional arguments:
   command                                                primary command (import, dry)
