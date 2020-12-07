@@ -117,6 +117,7 @@ A script used to import JSON from flyspray<span>.</span>py into a GitLab server 
 
 **Python Dependencies**<br>
 * requests
+* prettytable
 
 **Requirements**<br>
 * JSON produced by flyspray<span>.</span>py.
