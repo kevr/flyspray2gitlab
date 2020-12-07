@@ -30,7 +30,7 @@ api_base = None
 tasks = []
 
 def api_endpoint(path):
-  return f"{api_base}{path}"
+  return '/'.join([ api_base, path ])
 
 def error_log(*args, **kwargs):
   print(*args, **kwargs, file=sys.stderr)
@@ -222,7 +222,7 @@ def import_task(args, task, mappings):
   # Get repository ready to be used as :id in /project/:id.
   repository = urllib.parse.quote_plus(repository)
 
-  issues_endpoint = api_endpoint(f"/projects/{repository}/issues")
+  issues_endpoint = api_endpoint(f"projects/{repository}/issues")
   logging.info(f"Migrating task {task.get('id')} to {issues_endpoint}.")
 
   utc = pytz.timezone("UTC")
@@ -364,14 +364,11 @@ def command_dry(args, tasks):
     data.get(p) if p in data else args.default_target for p in projects
   ]
 
-  def api_base():
-    return f"{args.base}/api/{args.api}"
-
   def user_endpoint():
-    return '/'.join([api_base(), "user"])
+    return '/'.join([api_base, "user"])
 
   def project_endpoint(repo):
-    return '/'.join([api_base(), f"projects/{repo}"])
+    return '/'.join([api_base, f"projects/{repo}"])
 
   def upload_endpoint(repo):
     return '/'.join([project_endpoint(repo), "uploads"])
@@ -399,23 +396,17 @@ def command_dry(args, tasks):
 
       project_ep = project_endpoint(repo)
       if not project_ep in rv:
-        rv[project_ep] = MockResponse({
-          "id": project_id
-        })
+        rv[project_ep] = MockResponse({ "id": project_id })
 
       upload_ep = upload_endpoint(repo)
       if not upload_ep in rv:
-        rv[upload_ep] = MockResponse({
-          "full_path": "/uploads/mocked/path"
-        })
+        rv[upload_ep] = MockResponse({ "full_path": "/uploads/mocked/path" })
 
       issue_id = 1
       issues_ep = issues_endpoint(repo)
 
       if not issues_ep in rv:
-        rv[issues_ep] = MockResponse({
-          "iid": issue_id
-        })
+        rv[issues_ep] = MockResponse({ "iid": issue_id })
 
       issue_ep = issue_endpoint(repo, issue_id)
       if not issue_ep in rv:
