@@ -537,9 +537,6 @@ def main():
   global api_base
   api_base = f"{args.base}/api/{args.api}"
 
-  global upstream
-  upstream = args.upstream
-
   # Process stdin into a json list of task objects.
   if not stdin_available():
     return error_log("Timed out waiting for stdin; input JSON is required.")
