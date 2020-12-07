@@ -7,9 +7,6 @@
 # TODO: Add extensive formatting options to allow a user to specify
 # formatting for bug task imports.
 #
-# TODO: Add a rollback feature which runs when an import fails due
-# to an exception.
-#
 # License: MIT
 #
 # Contributions:
@@ -30,7 +27,7 @@ from signal import signal, SIGPIPE, SIG_DFL
 from prettytable import PrettyTable
 
 api_base = None
-upstream = None
+tasks = []
 
 def api_endpoint(path):
   return f"{api_base}{path}"
@@ -204,6 +201,12 @@ def import_task(args, task, mappings):
   @param task A task dictionary from flyspray.py
   @param mappings A dictionary of Flyspray project -> GitLab repo mappings.
   """
+
+  # We'll add the newly imported task to this global array.
+  # In case we ever error out, we'll use it to delete the tasks
+  # we created if we can.
+  global tasks
+
   logging.info(f"Importing task {task.get('id')}: {task.get('summary')}.")
   project = task.get("project")
   mapping = mappings.get(project, None)
@@ -248,6 +251,8 @@ def import_task(args, task, mappings):
   data = response.json()
 
   issue_id = data.get("iid")
+  tasks.append((issue_id, repository))
+
   issue_endpoint = f"{issues_endpoint}/{issue_id}"
   notes_endpoint = f"{issue_endpoint}/notes"
 
@@ -287,6 +292,33 @@ def import_task(args, task, mappings):
       raise requests.HTTPError(
           f"GitLab API returned '{response.status_code}'.")
 
+def rollback(args):
+  logging.warning("Rolling back by deleting the issues created via HTTP API.")
+
+  global tasks
+
+  # Get current user data.
+  data = requests.get(f"{args.base}/api/{args.api}/user").json()
+  is_admin = data.get("is_admin", False)
+
+  if is_admin:
+    # Delete issue
+    pass
+  else:
+    # Close issue
+    for issue_id, repo in tasks:
+      issue_endpoint = \
+        f"{args.base}/api/{args.api}/projects/{repo}/issues/{issue_id}"
+      response = requests.put(issue_endpoint, json={
+        "access_token": args.token,
+        "state_event": "close"
+      })
+      if response.status_code != 200:
+        raise requests.HTTPError(
+            f"GitLab API returned '{response.status_code}'.")
+
+  tasks.clear()
+
 # import command handler.
 def command_import(args, tasks):
   """ Run the import command. """
@@ -294,13 +326,128 @@ def command_import(args, tasks):
   mappings = dict()
   if args.project_mapping:
     mappings = json.load(open(args.project_mapping))
-  for task in tasks:
-    import_task(args, task, mappings)
+
+  try:
+    for task in tasks:
+      import_task(args, task, mappings)
+  except Exception:
+    traceback.print_exc()
+    # Perform task rollback.
+    rollback(args)
+
   return 0
+
+class MockResponse:
+  """ A fake Response object used to return to mocked up requests. """
+  data = None
+  status_code = 200
+
+  def __init__(self, data=dict()):
+    self.data = data
+
+  def json(self):
+    return self.data
 
 def command_dry(args, tasks):
   """ Run the dry command. """
-  raise NotImplementedError("command_dry has not yet been implemented")
+  from unittest import mock
+
+  projects = [ task["project"] for task in tasks ]
+
+  data = dict()
+
+  if args.project_mapping:
+    with open(args.project_mapping) as f:
+      data = json.load(f)
+
+  mappings = [
+    data.get(p) if p in data else args.default_target for p in projects
+  ]
+
+  def api_base():
+    return f"{args.base}/api/{args.api}"
+
+  def user_endpoint():
+    return '/'.join([api_base(), "user"])
+
+  def project_endpoint(repo):
+    return '/'.join([api_base(), f"projects/{repo}"])
+
+  def upload_endpoint(repo):
+    return '/'.join([project_endpoint(repo), "uploads"])
+
+  def issues_endpoint(repo):
+    return '/'.join([project_endpoint(repo), "issues"])
+
+  def issue_endpoint(repo, issue):
+    return '/'.join([issues_endpoint(repo), f"{issue}"])
+
+  def notes_endpoint(repo, issue):
+    return '/'.join([issue_endpoint(repo, issue), "notes"])
+
+  def mock_requests(*route_args, **kwargs):
+    rv = dict()
+
+    user_ep = user_endpoint()
+    rv[user_ep] = MockResponse({ "is_admin": False })
+
+    for mapping in mappings:
+      repo = urllib.parse.quote_plus(mapping)
+
+      # Mock return for this mapping's /project/:id endpoint.
+      project_id = 1
+
+      project_ep = project_endpoint(repo)
+      if not project_ep in rv:
+        rv[project_ep] = MockResponse({
+          "id": project_id
+        })
+
+      upload_ep = upload_endpoint(repo)
+      if not upload_ep in rv:
+        rv[upload_ep] = MockResponse({
+          "full_path": "/uploads/mocked/path"
+        })
+
+      issue_id = 1
+      issues_ep = issues_endpoint(repo)
+
+      if not issues_ep in rv:
+        rv[issues_ep] = MockResponse({
+          "iid": issue_id
+        })
+
+      issue_ep = issue_endpoint(repo, issue_id)
+      if not issue_ep in rv:
+        rv[issue_ep] = MockResponse()
+
+      notes_ep = notes_endpoint(repo, issue_id)
+      if not notes_ep in rv:
+        rv[notes_ep] = MockResponse()
+
+    return rv
+
+  def mock_get(*route_args, **kwargs):
+    rv = mock_requests(*route_args, **kwargs)
+    return rv.get(list(route_args)[0])
+
+  requests.get = mock.MagicMock(side_effect=mock_get)
+
+  def mock_post(*route_args, **kwargs):
+    rv = mock_requests(*route_args, **kwargs)
+    return rv.get(list(route_args)[0])
+
+  requests.post = mock.MagicMock(side_effect=mock_post)
+
+  def mock_put(*route_args, **kwargs):
+    rv = mock_requests(*route_args, **kwargs)
+    return rv.get(list(route_args)[0])
+
+  requests.put = mock.MagicMock(side_effect=mock_put)
+
+  # Alright, all of our request endpoint mocks are setup. Run our normal
+  # import command code.
+  return command_import(args, tasks)
 
 def prepare_args():
   """ Prepare and parse arguments for the program. """
