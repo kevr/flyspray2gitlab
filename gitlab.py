@@ -30,7 +30,7 @@ from prettytable import PrettyTable
 
 api_base = None
 tasks = []
-users = None
+users = dict()
 
 
 def api_endpoint(path):
@@ -70,6 +70,24 @@ def get_users(token):
     endpoint = users_endpoint() + f"?access_token={token}"
     response = requests.get(endpoint)
     return json.loads(response.content.decode())
+
+
+def get_user(token, username):
+    endpoint = users_endpoint() + f"?username={username}"
+    response = requests.get(endpoint)
+
+    data = json.loads(response.content.decode())
+    if len(data):
+        return data[0]
+
+
+def get_user_if_missing(args, username):
+    global users
+    if username not in users:
+        users[username] = get_user(args.token, username)
+        return users.get(username)
+    elif username in users:
+        return users.get(username)
 
 
 def error_log(*args, **kwargs):
@@ -249,7 +267,7 @@ def comment_to_note(args, comment, attachments):
     output = "<small>Added %s</small>" % dts
 
     user = comment.get("user")
-    if not user_exists(user):
+    if not get_user_if_missing(args, user.get("user_name")):
         # If the user can't be found on gitlab, reference back
         # to them via the upstream format.
         commented_by = get_if(
@@ -281,8 +299,7 @@ def import_task(args, task, mappings):
     gitlab_user = None
 
     user_name = task.get("opened_by").get("user_name").lower()
-    if user_name in users:
-        gitlab_user = users.get(user_name)
+    gitlab_user = get_user_if_missing(args, user_name)
 
     logging.info(f"Importing task {task.get('id')}: {task.get('summary')}.")
     project = task.get("project")
@@ -353,7 +370,9 @@ def import_task(args, task, mappings):
 
         # If the Flyspray comment's user's username is found in
         # the global gitlab users dictionary, set gitlab_user to it.
-        if _user_name in users:
+        if _user_name not in users:
+            _gitlab_user = users[_user_name] = get_user(args.token, _user_name)
+        elif _user_name in users:
             _gitlab_user = users.get(_user_name)
 
         date_added = datetime.fromtimestamp(comment["date_added"], utc)
@@ -424,10 +443,6 @@ def rollback(args):
 
 def command_import(args, tasks):
     """ Run the import command. """
-
-    global users
-    if users is None:
-        users = {u["username"].lower(): u for u in get_users(args.token)}
 
     logging.debug("Import triggered.")
     mappings = dict()
@@ -546,6 +561,27 @@ def command_dry(args, tasks):
     # Alright, all of our request endpoint mocks are setup. Run our normal
     # import command code.
     return command_import(args, tasks)
+
+
+""" The following function provides a 'users' command which
+generates 500 users on Gitlab. It is used purely for development.
+
+def command_users(args, tasks):
+    for i in range(500):
+        response = requests.post(users_endpoint(), json={
+            "access_token": args.token,
+            "username": f"u{i}",
+            "email": f"u{i}@example.org",
+            "name": f"u{i} Master",
+            "password": "password"
+        })
+        print(response.status_code)
+        print(response.content.decode())
+        assert response.status_code >= 200 and response.status_code <= 299
+        logging.info(f"Created user 'u{i}' on Gitlab.")
+
+    return 0
+"""
 
 
 def prepare_args():
