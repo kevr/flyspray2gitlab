@@ -33,6 +33,14 @@ tasks = []
 users = dict()
 
 
+def request(fn, *args, **kwargs):
+    response = fn(*args, **kwargs)
+    if response.status_code not in (200, 201):
+        raise requests.HTTPError(
+            f"GitLab API returned '{response.status_code}'.")
+    return response
+
+
 def api_endpoint(path):
     return '/'.join([api_base, path])
 
@@ -167,11 +175,8 @@ def upload_attachment(args, repository, attachment, root):
 
     logging.info("Uploading attachment " +
                  f"{attachment.get('attachment_id')} to {upload_ep}.")
-    response = requests.post(upload_ep, files=files, headers=headers)
 
-    if response.status_code not in (200, 201):
-        raise requests.HTTPError(
-            f"GitLab API returned '{response.status_code}'.")
+    response = request(requests.post, upload_ep, files=files, headers=headers)
 
     data = response.json()  # GitLab API response json data.
     return {"name": orig_name, "path": data.get("full_path")}
@@ -332,6 +337,20 @@ def import_task(args, task, mappings):
         if i.get("title") == summary
     ]) >= 1
 
+    if args.keep_ids:
+        task_id = task.get("id")
+        iids = [int(task_id)]
+        response = request(requests.get, issues_ep, params={
+            "access_token": args.token,
+            "iids": iids
+        })
+        _data = json.loads(response.content.decode())
+        logging.error("--keep-ids was used but issue with IID already exists.")
+        logging.error(
+            "To continue, clear out all Gitlab issues in the target repository "
+            "that match Flyspray task IDs or omit --keep-ids.")
+        sys.exit(1)
+
     if exists:
         logging.error(
             "Issue with title '%s' already exists, skipping" % summary)
@@ -353,17 +372,18 @@ def import_task(args, task, mappings):
     if gitlab_user:
         headers["Sudo"] = str(gitlab_user.get("id"))
 
-    response = requests.post(issues_ep, json={
+    data = {
         "access_token": args.token,
         "title": task.get("summary"),
         "description": task_to_issue(args, task, attachments),
         "created_at": date_opened.isoformat(),
         "weight": task.get("priority_id")
-    }, headers=headers)
+    }
 
-    if response.status_code not in (200, 201):
-        raise requests.HTTPError(
-            f"GitLab API returned '{response.status_code}'.")
+    if args.keep_ids:
+        data["iid"] = task.get("id")
+
+    response = request(requests.post, issues_ep, json=data, headers=headers)
 
     data = response.json()
 
@@ -419,23 +439,14 @@ def import_task(args, task, mappings):
         if _gitlab_user:
             headers["Sudo"] = str(_gitlab_user.get("id"))
 
-        response = requests.post(notes_ep, json=data, headers=headers)
-
-        if response.status_code not in (200, 201):
-            raise requests.HTTPError(
-                f"GitLab API returned '{response.status_code}'.")
+        response = request(requests.post, notes_ep, json=data, headers=headers)
 
     if task.get("closed"):
         # Then close it by updating the issue's state to 'close'.
-        response = requests.put(issue_ep, json={
+        request(requests.put, issue_ep, json={
             "access_token": args.token,
             "state_event": "close"
         })
-
-        # Obligatory error handling.
-        if response.status_code != 200:
-            raise requests.HTTPError(
-                f"GitLab API returned '{response.status_code}'.")
 
 
 def rollback(args):
@@ -613,7 +624,8 @@ additional information:
   --project-mapping\ta path to a json mapping file containing project (key) to
   \t\t\trepository (value) mappings (see projects.map.json.example)
   --upstream\t\tThe upstream argument specifies an HTTP(S) base to use for
-  \t\t\treferencing back to users who made the original tasks and comments.
+  \t\t\treferencing back to users who made the original tasks and comments
+  --keep-ids\t\tpersist task ids from FLyspray over to Gitlab
 
 Example:
   $ flyspray.py | gitlab.py import -m projects.json
@@ -648,6 +660,9 @@ Note: This program reads stdin as input for flyspray json data.
     parser.add_argument("--skip-attachments", dest="skip_attachments",
                         default=False, const=True, action="store_const",
                         help="skip attachments altogether")
+    parser.add_argument("--keep-ids", default=False, const=True,
+                        action="store_const",
+                        help="keep task ids from Flyspray")
     parser.add_argument("command", default='',
                         help="primary command (import, dry)")
     return parser.parse_args()
