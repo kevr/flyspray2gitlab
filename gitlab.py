@@ -14,6 +14,7 @@
 #
 import sys
 import os
+import re
 import argparse
 import traceback
 import json
@@ -29,10 +30,15 @@ from prettytable import PrettyTable
 
 api_base = None
 tasks = []
+users = None
 
 
 def api_endpoint(path):
     return '/'.join([api_base, path])
+
+
+def users_endpoint():
+    return '/'.join([api_base, "users"])
 
 
 def user_endpoint():
@@ -57,6 +63,13 @@ def issue_endpoint(repo, issue):
 
 def notes_endpoint(repo, issue):
     return '/'.join([issue_endpoint(repo, issue), "notes"])
+
+
+def get_users(token):
+    """ Retrieve a json list of users from Gitlab. """
+    endpoint = users_endpoint() + f"?access_token={token}"
+    response = requests.get(endpoint)
+    return json.loads(response.content.decode())
 
 
 def error_log(*args, **kwargs):
@@ -181,8 +194,10 @@ def task_to_issue(args, task, attachments):
                        f"[{user.get('real_name')} ({user.get('user_name')})]"
                        f"({args.upstream}/user/{user.get('id')})",
                        f"{user.get('real_name')} ({user.get('user_name')})")
-
     header = ["Task Info (Flyspray)", ""]
+
+    dts = datetime.fromtimestamp(task.get("date_opened"))
+    dts = dts.strftime("%Y-%m-%d %H:%M:%S UTC")
     rows = [
         ["Opened By", opened_by],
         ["Task ID", task.get("id")],
@@ -192,6 +207,7 @@ def task_to_issue(args, task, attachments):
         ["Category", task.get("category")],
         ["Version", task.get("version")],
         ["OS", task.get("os")],
+        ["Opened", dts]
     ]
 
     table = raw_markdown_table(header, rows)
@@ -213,23 +229,37 @@ def task_to_issue(args, task, attachments):
 """
 
 
+def user_exists(user):
+    return user.get("user_name") in users
+
+
 def comment_to_note(args, comment, attachments):
     # Links back to the user in this string may not always work. Flyspray
     # does not by default allow all users to be viewed via /user/{id} like
     # bugs.archlinux.org does.
+    output = str()
+
+    date_added = comment.get("date_added")
+    date_added = datetime.fromtimestamp(date_added)
+
+    dts = date_added.strftime("%Y-%m-%d %H:%M:%S UTC")
+    output = "<small>Added %s</small>" % dts
+
     user = comment.get("user")
-    commented_by = get_if(
-        lambda: args.upstream,
-        f"[{user.get('real_name')} ({user.get('user_name')})]"
-        f"({args.upstream}/user/{user.get('id')})",
-        f"{user.get('real_name')} ({user.get('user_name')})")
-    return f"""\
-<small>Commented by {commented_by}</small>
+    if not user_exists(user):
+        # If the user can't be found on gitlab, reference back
+        # to them via the upstream format.
+        commented_by = get_if(
+            lambda: args.upstream,
+            f"[{user.get('real_name')} ({user.get('user_name')})]"
+            f"({args.upstream}/user/{user.get('id')})",
+            f"{user.get('real_name')} ({user.get('user_name')})")
+        output += f"<small> - Commented by {commented_by}</small>\n\n"
 
-{comment.get('comment_text')}
-
-{attachments_markdown(attachments)}
-"""
+    output += "\n\n"
+    output += comment.get("comment_text") + "\n\n"
+    output += attachments_markdown(attachments) + "\n"
+    return output
 
 
 def import_task(args, task, mappings):
@@ -244,6 +274,12 @@ def import_task(args, task, mappings):
     # In case we ever error out, we'll use it to delete the tasks
     # we created if we can.
     global tasks
+
+    gitlab_user = None
+
+    user_name = task.get("opened_by").get("user_name").lower()
+    if user_name in users:
+        gitlab_user = users.get(user_name)
 
     logging.info(f"Importing task {task.get('id')}: {task.get('summary')}.")
     project = task.get("project")
@@ -275,13 +311,17 @@ def import_task(args, task, mappings):
             args, repository, attachments, args.attachments)
         logging.debug(f"Uploaded task attachments: {attachments}.")
 
+    headers = dict()
+    if gitlab_user:
+        headers["Sudo"] = str(gitlab_user.get("id"))
+
     response = requests.post(issues_ep, json={
         "access_token": args.token,
         "title": task.get("summary"),
         "description": task_to_issue(args, task, attachments),
         "created_at": date_opened.isoformat(),
         "weight": task.get("priority_id")
-    })
+    }, headers=headers)
 
     if response.status_code not in (200, 201):
         raise requests.HTTPError(
@@ -295,38 +335,64 @@ def import_task(args, task, mappings):
     issue_ep = issue_endpoint(repository, issue_id)
     notes_ep = notes_endpoint(repository, issue_id)
 
-    for comment in task["comments"]:
+    for comment in task.get("comments"):
         logging.info(
             f"Migrating comment {comment.get('comment_id')} to {notes_ep}.")
 
-        date_added = datetime.fromtimestamp(comment["last_edited_time"], utc) \
-            if comment["last_edited_time"] > comment["date_added"] else \
-            datetime.fromtimestamp(comment["date_added"], utc)
+        _user = comment.get("user")
+        _user_name = _user.get("user_name").lower()
+
+        # This comment's gitlab user. If this variable is not None,
+        # we will sudo as the user. Otherwise, we will post as
+        # the token user in a slightly modified format, pointing
+        # back to the originating flyspray instance.
+        _gitlab_user = None
+
+        # If the Flyspray comment's user's username is found in
+        # the global gitlab users dictionary, set gitlab_user to it.
+        if _user_name in users:
+            _gitlab_user = users.get(_user_name)
+
+        date_added = datetime.fromtimestamp(comment["date_added"], utc)
 
         attachments = []
         if not args.skip_attachments:
+            # Gather attachments by first uploading them to Gitlab,
+            # then storing their information in attachments.
             attachments = comment.get("attachments")
             attachments = upload_attachments(
                 args, repository, attachments, args.attachments)
             logging.debug(f"Uploaded comment attachments: {attachments}.")
+
         # At this point, attachments should be populated with any attachments
         # that were originally uploaded to Flyspray's comment.
 
-        response = requests.post(notes_ep, json={
+        # Post the comment to gitlab.
+        ds = date_added.isoformat() + "Z"
+        ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
+        data = {
             "access_token": args.token,
-            "body": comment_to_note(args, comment, attachments),
-            "created_at": date_added.isoformat()
-        })
+            "body": comment_to_note(args, comment, attachments)
+        }
+
+        headers = dict()
+        if _gitlab_user:
+            headers["Sudo"] = str(_gitlab_user.get("id"))
+
+        response = requests.post(notes_ep, json=data, headers=headers)
 
         if response.status_code not in (200, 201):
             raise requests.HTTPError(
                 f"GitLab API returned '{response.status_code}'.")
 
     if task.get("closed"):
+        # Then close it by updating the issue's state to 'close'.
         response = requests.put(issue_ep, json={
             "access_token": args.token,
             "state_event": "close"
         })
+
+        # Obligatory error handling.
         if response.status_code != 200:
             raise requests.HTTPError(
                 f"GitLab API returned '{response.status_code}'.")
@@ -355,6 +421,11 @@ def rollback(args):
 
 def command_import(args, tasks):
     """ Run the import command. """
+
+    global users
+    if users is None:
+        users = {u["username"].lower(): u for u in get_users(args.token)}
+
     logging.debug("Import triggered.")
     mappings = dict()
     if args.project_mapping:
@@ -411,6 +482,11 @@ def command_dry(args, tasks):
 
         user_ep = user_endpoint()
         rv[user_ep] = MockResponse({"is_admin": False})
+
+        users_ep = users_endpoint()
+        _users_ep = f"{users_ep}?access_token={args.token}"
+        rv[_users_ep] = MockResponse()
+        rv[_users_ep].content = b'[]'
 
         for mapping in mappings:
             repo = urllib.parse.quote_plus(mapping)
