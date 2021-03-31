@@ -193,7 +193,10 @@ def task_to_issue(args, task, attachments):
     opened_by = get_if(lambda: args.upstream,
                        f"[{user.get('real_name')} ({user.get('user_name')})]"
                        f"({args.upstream}/user/{user.get('id')})",
-                       f"{user.get('real_name')} ({user.get('user_name')})")
+                       f"{user.get('real_name')} ({user.get('user_name')})") \
+        if not user_exists(task["opened_by"]) else \
+        f"{user.get('real_name')} ({user.get('user_name')})"
+
     header = ["Task Info (Flyspray)", ""]
 
     dts = datetime.fromtimestamp(task.get("date_opened"))
