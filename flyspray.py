@@ -86,8 +86,11 @@ def parse_tags(summary):
     return re.findall(r'\[([^\]]+)\]', summary)
 
 
-def task_query(database, prefix):
+def task_query(args, database, prefix):
     """ Return SQL used to fetch all tasks from Flyspray's DB. """
+    where = str()
+    if args.project_id:
+        where = f"WHERE t.project_id={args.project_id}"
     return f"""
 SELECT
 t.task_id,
@@ -119,6 +122,7 @@ LEFT OUTER JOIN {prefix}list_status ls ON ls.status_id = t.item_status
 LEFT OUTER JOIN {prefix}list_resolution lr ON
 lr.resolution_id = t.resolution_reason
 LEFT OUTER JOIN {prefix}list_version lv ON lv.version_id = t.product_version
+{where}
 GROUP BY tt.tasktype_name, cat.category_name, t.task_id, a.task_id,
 p.project_title, u.user_id, ls.status_name, au.user_id, lr.resolution_name,
 lv.version_name, os.os_name
@@ -241,7 +245,7 @@ WHERE task_id = {task['id']}
     return task
 
 
-def user_query(database, prefix):
+def user_query(args, database, prefix):
     """ Return SQL used to fetch a user from Flyspray's DB. """
     return f"SELECT * FROM {prefix}users"
 
@@ -269,7 +273,7 @@ def user_finalize(database, prefix, user):
     return user
 
 
-def get_target(database, prefix, table, *args):
+def get_target(nargs, database, prefix, table, *args):
 
     # Some query for different tables
     criterion = {
@@ -294,7 +298,7 @@ def get_target(database, prefix, table, *args):
     convert = converters.get(table)
     destructor = destructors.get(table)
 
-    sql = f(database, prefix)
+    sql = f(nargs, database, prefix)
     with connection.cursor() as cursor:
         cursor.execute(sql)
         results = cursor.fetchall()
@@ -310,19 +314,21 @@ def main():
         formatter_class=lambda prog: argparse.RawTextHelpFormatter(
             prog, max_help_position=80))
     parser.add_argument("--host", dest="host", default="localhost",
-                        help="mysql server host (default: 'localhost')")
+                        help="db server host (default: 'localhost')")
     parser.add_argument("--port", dest="port", default=3306, type=int,
-                        help="mysql server port (default: 3306)")
+                        help="db server port (default: 3306)")
     parser.add_argument("--user", dest="user", default="flyspray",
-                        help="mysql user (default: 'flyspray')")
+                        help="db user (default: 'flyspray')")
     parser.add_argument("--password", dest="password", default="flyspray",
-                        help="mysql password (default: 'flyspray')")
+                        help="db password (default: 'flyspray')")
     parser.add_argument("--db-type", dest="db_type", default="pgsql",
                         help="database type: (mysql|pgsql)")
     parser.add_argument("--database", dest="database", default="flyspray",
-                        help="mysql database (default: 'flyspray')")
+                        help="db name (default: 'flyspray')")
     parser.add_argument("--prefix", dest="prefix", default="flyspray_",
                         help="database table prefix (default: 'flyspray_')")
+    parser.add_argument("--project-id", dest="project_id",
+                        help="specific project id (optional)")
     args = parser.parse_args()
 
     try:
@@ -334,8 +340,8 @@ def main():
 
     # print(describe_table(args.database, args.prefix, "users"))
     # print(describe_table(args.database, args.prefix, "assigned"))
-    users = get_target(args.database, args.prefix, "users")
-    tasks = get_target(args.database, args.prefix, "tasks", users)
+    users = get_target(args, args.database, args.prefix, "users")
+    tasks = get_target(args, args.database, args.prefix, "tasks", users)
     print(json.dumps(tasks, indent=2), end='')
     return 0
 
