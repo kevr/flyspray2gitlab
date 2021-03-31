@@ -222,8 +222,18 @@ WHERE task_id = {task['id']}
             key = description[i][0]
             value = result[i]
             d[key] = value
-        d["user"] = user
+
+        user_id = d.get("user_id")
+        _user = dict(
+            list(filter(lambda c: c["id"] == user_id, users))[0])
+        d["user"] = _user
+
+        # Remove passwords from the user dicts we construct here.
+        if "user_pass" in d["user"]:
+            del d["user"]["user_pass"]
+
         del d["user_id"]
+
         d["attachments"] = list(
             filter(lambda a: a["comment_id"] == d["comment_id"], attachments))
         task["comments"].append(d)
