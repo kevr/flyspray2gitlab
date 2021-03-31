@@ -332,10 +332,11 @@ def import_task(args, task, mappings):
     })
     assert response.status_code == 200
 
-    exists = len([
+    issues = [
         i for i in json.loads(response.content.decode())
         if i.get("title") == summary
-    ]) >= 1
+    ]
+    exists = len(issues) >= 1
 
     if args.keep_ids:
         task_id = task.get("id")
@@ -353,8 +354,8 @@ def import_task(args, task, mappings):
 
     if exists:
         logging.error(
-            "Issue with title '%s' already exists, skipping" % summary)
-        return
+            "Issue with title '%s' already exists, skipping." % summary)
+        return issues[0]
 
     utc = pytz.timezone("UTC")
     date_opened = datetime.fromtimestamp(task["last_edited"], utc) \
@@ -430,7 +431,7 @@ def import_task(args, task, mappings):
         # Post the comment to gitlab.
         ds = date_added.isoformat() + "Z"
         ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
-        data = {
+        _data = {
             "access_token": args.token,
             "body": comment_to_note(args, comment, attachments)
         }
@@ -439,7 +440,8 @@ def import_task(args, task, mappings):
         if _gitlab_user:
             headers["Sudo"] = str(_gitlab_user.get("id"))
 
-        response = request(requests.post, notes_ep, json=data, headers=headers)
+        response = request(requests.post, notes_ep,
+                           json=_data, headers=headers)
 
     if task.get("closed"):
         # Then close it by updating the issue's state to 'close'.
@@ -447,6 +449,8 @@ def import_task(args, task, mappings):
             "access_token": args.token,
             "state_event": "close"
         })
+
+    return data
 
 
 def rollback(args):
@@ -478,13 +482,38 @@ def command_import(args, tasks):
     if args.project_mapping:
         mappings = json.load(open(args.project_mapping))
 
+    # A mapping of flyspray task ids to gitlab issue ids.
+    # This mapping can be used to match tasks for redirection purposes.
+    iid_mapping = dict()
+
     try:
         for task in tasks:
-            import_task(args, task, mappings)
+            project = task.get("project")
+            repo = mappings.get(project, None)
+            if not repo:
+                repo = args.default_target
+
+            issue = import_task(args, task, mappings)
+
+            if args.id_mapping_output:
+                # Populate iid_mapping with this task.
+                task_id = str(task.get("id"))
+                if task_id not in iid_mapping:
+                    repo_ep = '/'.join([args.base, repo])
+                    repo_ep += f"/issues/{issue.get('iid')}"
+                    iid_mapping[task_id] = repo_ep
+
     except Exception:
         traceback.print_exc()
         # Perform task rollback.
         rollback(args)
+        return 1
+
+    if args.id_mapping_output:
+        with open(args.id_mapping_output, "w") as fh:
+            json.dump(iid_mapping, fh, indent=2)
+        logging.info(
+            "Dumped ID mappings to JSON file '%s'." % args.id_mapping_output)
 
     return 0
 
@@ -626,6 +655,8 @@ additional information:
   --upstream\t\tThe upstream argument specifies an HTTP(S) base to use for
   \t\t\treferencing back to users who made the original tasks and comments
   --keep-ids\t\tpersist task ids from FLyspray over to Gitlab
+  --id-mapping-output\ta writable path to a json mapping output file of
+  \t\t\tFlyspray task ids to Gitlab issue URLs
 
 Example:
   $ flyspray.py | gitlab.py import -m projects.json
@@ -663,6 +694,8 @@ Note: This program reads stdin as input for flyspray json data.
     parser.add_argument("--keep-ids", default=False, const=True,
                         action="store_const",
                         help="keep task ids from Flyspray")
+    parser.add_argument("--id-mapping-output",
+                        help="task id to issue url mapping output file")
     parser.add_argument("command", default='',
                         help="primary command (import, dry)")
     return parser.parse_args()
