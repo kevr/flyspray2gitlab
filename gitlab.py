@@ -319,6 +319,24 @@ def import_task(args, task, mappings):
     issues_ep = issues_endpoint(repository)
     logging.info(f"Migrating task {task.get('id')} to {issues_ep}.")
 
+    # Check to see if this title already exists in Gitlab.
+    summary = task.get("summary")
+    response = requests.get(issues_ep, params={
+        "access_token": args.token,
+        "search": summary
+    })
+    assert response.status_code == 200
+
+    exists = len([
+        i for i in json.loads(response.content.decode())
+        if i.get("title") == summary
+    ]) >= 1
+
+    if exists:
+        logging.error(
+            "Issue with title '%s' already exists, skipping" % summary)
+        return
+
     utc = pytz.timezone("UTC")
     date_opened = datetime.fromtimestamp(task["last_edited"], utc) \
         if task["last_edited"] > task["date_opened"] else \
