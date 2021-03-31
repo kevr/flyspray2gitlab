@@ -129,7 +129,7 @@ lv.version_name, os.os_name
 """
 
 
-def task_convert(task, users=[]):
+def task_convert(task, users=dict()):
     """ Convert a result of task_query() to Python dictionary. """
     return {
         "id": task[0],
@@ -189,7 +189,7 @@ WHERE task_id = {task['id']}
     ]
 
 
-def task_finalize(database, prefix, task, users=[]):
+def task_finalize(database, prefix, task, users=dict()):
     """ Perform final operations on a task after task_convert is run. """
 
     # Get comments
@@ -204,7 +204,7 @@ WHERE task_id = {task['id']}
 
     # We need to explicitly create our own user dict out of this
     # query so we can delete keys ourselves.
-    user = dict(list(filter(lambda c: c["id"] == task["opened_by"], users))[0])
+    user = users.get(task["opened_by"])
 
     del user["user_pass"]
     del user["dateformat"]
@@ -215,9 +215,13 @@ WHERE task_id = {task['id']}
     if user:
         task["opened_by"] = user
 
-    attachments = task_attachments(database, prefix, task)
+    attachments = {
+        a["comment_id"]: a
+        for a in task_attachments(database, prefix, task)
+    }
+
     task["attachments"] = list(
-        filter(lambda a: a["comment_id"] == 0, attachments))
+        filter(lambda a: a["comment_id"] == 0, attachments.values()))
     task["comments"] = []
     description = describe_table(database, prefix, "comments")
     for result in results:
@@ -228,9 +232,7 @@ WHERE task_id = {task['id']}
             d[key] = value
 
         user_id = d.get("user_id")
-        _user = dict(
-            list(filter(lambda c: c["id"] == user_id, users))[0])
-        d["user"] = _user
+        d["user"] = users.get(user_id)
 
         # Remove passwords from the user dicts we construct here.
         if "user_pass" in d["user"]:
@@ -239,7 +241,8 @@ WHERE task_id = {task['id']}
         del d["user_id"]
 
         d["attachments"] = list(
-            filter(lambda a: a["comment_id"] == d["comment_id"], attachments))
+            filter(lambda a: a["comment_id"] == d["comment_id"],
+                   attachments.values()))
         task["comments"].append(d)
 
     return task
@@ -341,7 +344,8 @@ def main():
     # print(describe_table(args.database, args.prefix, "users"))
     # print(describe_table(args.database, args.prefix, "assigned"))
     users = get_target(args, args.database, args.prefix, "users")
-    tasks = get_target(args, args.database, args.prefix, "tasks", users)
+    tasks = get_target(args, args.database, args.prefix, "tasks",
+                       {u["id"]: u for u in users})
     print(json.dumps(tasks, indent=2), end='')
     return 0
 
