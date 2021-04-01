@@ -831,10 +831,10 @@ additional information:
     parser.add_argument("--id-mapping-output",
                         help="task id to issue url mapping output file")
     parser.add_argument("--dump-file", required=True, help="dump file")
+    parser.add_argument("--promote", default=False, action="store_const",
+                        const=True, help="enable owner promotion")
     parser.add_argument("command", default='',
                         help="primary command (import, dry)")
-    parser.add_argument("--promote", default=False,
-                        help="enable owner promotion")
     return parser.parse_args()
 
 
