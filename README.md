@@ -134,7 +134,7 @@ A script used to import JSON from flyspray<span>.</span>py into a GitLab server 
 usage: gitlab.py [-hv] [--skip-attachments] [-btmdua ARG] command
 
 positional arguments:
-  command                                                primary command (import, dry)
+  command                                                primary command (import)
 
 optional arguments:
   -h, --help                                             show this help message and exit
@@ -153,7 +153,6 @@ optional arguments:
 
 valid commands:
   import        import stdin json into a gitlab instance
-  dry           a dry run of import
 
 additional information:
   --project-mapping a path to a json mapping file containing project (key) to

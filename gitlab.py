@@ -23,7 +23,6 @@ import select
 import requests
 import pytz
 import urllib
-from unittest import mock
 from datetime import datetime
 from signal import signal, SIGPIPE, SIG_DFL
 from prettytable import PrettyTable
@@ -721,109 +720,6 @@ def command_import(args, tasks):
     return 0
 
 
-class MockResponse:
-    """ A fake Response object used to return to mocked up requests. """
-    data = None
-    status_code = 200
-
-    def __init__(self, data=dict()):
-        self.data = data
-
-    def json(self):
-        return self.data
-
-
-def command_dry(args, tasks):
-    """ Run the dry command. """
-    projects = [task["project"] for task in tasks]
-
-    data = dict()
-
-    if args.project_mapping:
-        with open(args.project_mapping) as f:
-            data = json.load(f)
-
-    mappings = [
-        data.get(p) if p in data else args.default_target for p in projects
-    ]
-
-    # Some variables used to maintain state during a dry run.
-    # Any nested functions that alter these values must declare
-    # them as nonlocal: `nonlocal c_project_id`.
-    c_project_id = 0
-    c_project_set = dict()
-
-    def mock_requests(*route_args, **kwargs):
-        nonlocal c_project_id
-        nonlocal c_project_set
-
-        rv = dict()
-
-        user_ep = user_endpoint()
-        rv[user_ep] = MockResponse({"is_admin": False})
-
-        users_ep = users_endpoint()
-        _users_ep = f"{users_ep}?access_token={args.token}"
-        rv[_users_ep] = MockResponse()
-        rv[_users_ep].content = b'[]'
-
-        for mapping in mappings:
-            repo = urllib.parse.quote_plus(mapping)
-
-            if repo not in c_project_set:
-                c_project_id += 1
-                c_project_set[repo] = c_project_id
-
-            project_id = c_project_set.get(repo)
-            project_ep = project_endpoint(repo)
-            if project_ep not in rv:
-                rv[project_ep] = MockResponse({"id": project_id})
-
-            upload_ep = upload_endpoint(repo)
-            if upload_ep not in rv:
-                rv[upload_ep] = MockResponse(
-                    {"full_path": "/uploads/mocked/path"})
-
-            # We don't really double check the issue id we get back
-            # during an import, so just stub them all out as id = 1.
-            issue_id = 1
-            issues_ep = issues_endpoint(repo)
-            if issues_ep not in rv:
-                rv[issues_ep] = MockResponse({"iid": issue_id})
-
-            issue_ep = issue_endpoint(repo, issue_id)
-            if issue_ep not in rv:
-                rv[issue_ep] = MockResponse()
-
-            notes_ep = notes_endpoint(repo, issue_id)
-            if notes_ep not in rv:
-                rv[notes_ep] = MockResponse()
-
-        return rv
-
-    def mock_get(*route_args, **kwargs):
-        rv = mock_requests(*route_args, **kwargs)
-        return rv.get(list(route_args)[0])
-
-    requests.get = mock.MagicMock(side_effect=mock_get)
-
-    def mock_post(*route_args, **kwargs):
-        rv = mock_requests(*route_args, **kwargs)
-        return rv.get(list(route_args)[0])
-
-    requests.post = mock.MagicMock(side_effect=mock_post)
-
-    def mock_put(*route_args, **kwargs):
-        rv = mock_requests(*route_args, **kwargs)
-        return rv.get(list(route_args)[0])
-
-    requests.put = mock.MagicMock(side_effect=mock_put)
-
-    # Alright, all of our request endpoint mocks are setup. Run our normal
-    # import command code.
-    return command_import(args, tasks)
-
-
 """ The following function provides a 'users' command which
 generates 500 users on Gitlab. It is used purely for development.
 
@@ -850,7 +746,6 @@ def prepare_args():
     epilog = """\
 valid commands:
   import \t\timport stdin json into a gitlab instance
-  dry \t\t\ta dry run of import
 
 additional information:
   --project-mapping\ta path to a json mapping file containing project (key) to
@@ -898,7 +793,7 @@ additional information:
     parser.add_argument("--promote", default=False, action="store_const",
                         const=True, help="enable owner promotion")
     parser.add_argument("command", default='',
-                        help="primary command (import, dry)")
+                        help="primary command (import)")
     return parser.parse_args()
 
 
