@@ -139,29 +139,30 @@ positional arguments:
 optional arguments:
   -h, --help                                             show this help message and exit
   -v, --verbose                                          enable debug logging
-  -b BASE, --base BASE                                   GitLab base URL (default: 'http://gitlab.local.net')
+  -b BASE, --base BASE                                   GitLab URL (default: 'http://gitlab.local.net')
   -t TOKEN, --token TOKEN                                GitLab migration user access token
   -m PROJECT_MAPPING, --project-mapping PROJECT_MAPPING  path to a project json mapping file (default: 'projects.map.json')
-  -d DEFAULT_TARGET, --default-target DEFAULT_TARGET     default repository used as the import destination
-  -u UPSTREAM, --upstream UPSTREAM                       Flyspray upstream base URL
+  -d DEFAULT_TARGET, --default-target DEFAULT_TARGET     default task repository
+  -u UPSTREAM, --upstream UPSTREAM                       originating Flyspray server's base URL
   -a ATTACHMENTS, --attachments ATTACHMENTS              path to Flyspray attachments directory
   --api API                                              GitLab API version (default: 'v4')
   --skip-attachments                                     skip attachments altogether
+  --keep-ids                                             keep task ids from Flyspray
+  --id-mapping-output ID_MAPPING_OUTPUT                  task id to issue url mapping output file
+  --dump-file DUMP_FILE                                  dump file
 
 valid commands:
-  import                import stdin json into a gitlab instance
-  dry                   a dry run of import
+  import        import stdin json into a gitlab instance
+  dry           a dry run of import
 
 additional information:
-  --project-mapping     a path to a json mapping file containing project (key) to
-                        repository (value) mappings (see projects.map.json.example)
-  --upstream            The upstream argument specifies an HTTP(S) base to use for
-                        referencing back to users who made the original tasks and comments.
-
-Example:
-  $ flyspray.py | gitlab.py import -m projects.json
-
-Note: This program reads stdin as input for flyspray json data.
+  --project-mapping a path to a json mapping file containing project (key) to
+            repository (value) mappings (see projects.map.json.example)
+  --upstream        The upstream argument specifies an HTTP(S) base to use for
+            referencing back to users who made the original tasks and comments
+  --keep-ids        persist task ids from FLyspray over to Gitlab
+  --id-mapping-output   a writable path to a json mapping output file of
+            Flyspray task ids to Gitlab issue URLs
 ```
 
 You'll most likely want to supply a mapping file to direct different Flyspray projects to specific repositories on your GitLab target. Otherwise, only the default target will be used for all projects.
@@ -174,6 +175,19 @@ You'll most likely want to supply a mapping file to direct different Flyspray pr
 ```
 
 The `--upstream` in this sense should be set to an originating Flyspray server which houses a `/user/:user_id` route akin to https://bugs.archlinux.org's implementation. This URL is used to link back to users who opened tasks or wrote comments in the original tasks.
+
+### Examples
+
+    $ ./flyspray.py > flyspray.dump
+    $ ./gitlab.py --dump-file flyspray.dump \
+        --default-target root/default \
+        --keep-ids \
+        --id-mapping-output ids.json \
+        --upstream https://bugs.archlinux.org \
+        -b https://gitlab.archlinux.org \
+        -t "$(cat token.txt)" \
+        -a ~/attachments \
+        import
 
 ## Rollback
 
