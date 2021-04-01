@@ -108,7 +108,10 @@ au.user_id,
 t.is_closed,
 lr.resolution_name,
 lv.version_name,
-os.os_name
+os.os_name,
+t.closed_by,
+t.closure_comment,
+t.date_closed
 FROM {prefix}tasks t
 LEFT OUTER JOIN {prefix}users u ON u.user_id = t.opened_by
 LEFT OUTER JOIN {prefix}assigned a ON a.task_id = t.task_id
@@ -148,6 +151,9 @@ def task_convert(task, users=dict()):
         "resolution": task[13],
         "version": task[14],
         "os": task[15],
+        "closed_by": task[16],
+        "closure_comment": task[17],
+        "date_closed": task[18],
 
         # Some extra customized fields.
         "tags": parse_tags(task[4])
@@ -253,6 +259,10 @@ WHERE task_id = {task['id']}
             filter(lambda a: a["comment_id"] == d["comment_id"],
                    attachments.values()))
         task["comments"].append(d)
+
+    closed_by = task.get("closed_by")
+    if closed_by is not None:
+        task["closed_by"] = users.get(closed_by)
 
     return task
 

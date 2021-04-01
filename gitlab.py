@@ -293,6 +293,30 @@ def user_exists(user):
     return user.get("user_name") in users
 
 
+def close_comment(args, task, group_owned=False):
+    output = str()
+
+    if not group_owned:
+        date_closed = datetime.fromtimestamp(int(task.get("date_closed")))
+        dts = date_closed.strftime("%Y-%m-%d %H:%M:%S UTC")
+        output += "<small>Added %s</small>" % dts
+
+    user = task.get("closed_by")
+    if not get_user_if_missing(args, user.get("user_name")):
+        commented_by = get_if(
+            lambda: args.upstream,
+            f"[{user.get('name')} ({user.get('username')})]"
+            f"({args.upstream}/user/{user.get('id')})",
+            f"{user.get('name')} ({user.get('username')})")
+        if not group_owned:
+            output += "<small> - </small>"
+        output += f"<small>Commented by {commented_by}</small>\n\n"
+
+    comment = task.get("closure_comment")
+    output += "\n\n**Additional comments about closing**\n\n" + comment + "\n"
+    return output
+
+
 def comment_to_note(args, comment, attachments, group_owned=False):
     # Links back to the user in this string may not always work. Flyspray
     # does not by default allow all users to be viewed via /user/{id} like
@@ -561,11 +585,44 @@ def import_task(args, task, mappings):
                            json=_data, headers=headers)
 
     if task.get("closed"):
+        closed_by = task.get("closed_by")
+        _user = get_user(args.token, closed_by.get("user_name"))
+        closed_by_member = get_member(args.token, group,
+                                      closed_by.get("username"))
+
+        promote(to_restore, to_remove, args.token, group, is_group,
+                closed_by, closed_by_member)
+        if task.get("closure_comment"):
+            _data = {
+                "access_token": args.token,
+                "body": close_comment(args, task, is_group)
+            }
+
+            date_closed = datetime.fromtimestamp(
+                int(task.get("date_closed")))
+
+            if is_group:
+                ds = date_closed.isoformat() + "Z"
+                ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
+                _data["created_at"] = ds
+
+            headers = {
+                "Sudo": str(_user.get("id"))
+            }
+
+            # Add closure comment note.
+            response = request(requests.post, notes_ep,
+                               json=_data, headers=headers)
+
+        headers = dict()
+        if get_user_if_missing(args, _user.get("username")):
+            headers["Sudo"] = str(_user.get("id"))
+
         # Then close it by updating the issue's state to 'close'.
         request(requests.put, issue_ep, json={
             "access_token": args.token,
             "state_event": "close"
-        })
+        }, headers=headers)
 
     # Restore repository members.
     restore(to_restore, to_remove, args.token, group, is_group)
