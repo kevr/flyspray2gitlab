@@ -400,6 +400,67 @@ def restore(to_restore, to_remove, token, group, is_group):
     to_remove = set()
 
 
+def import_comments(args, to_restore, to_remove, task, issue, repo, group,
+                    is_group, mappings):
+    notes_ep = notes_endpoint(repo, issue.get("iid"))
+    for comment in task.get("comments"):
+        logging.info(
+            f"Migrating comment {comment.get('comment_id')} to {notes_ep}.")
+
+        _user = comment.get("user")
+        _user_name = _user.get("user_name").lower()
+
+        _gitlab_user = get_user(args.token, _user_name)
+        _gitlab_member = get_member(args.token, group, _user_name)
+        promote(to_restore, to_remove, args.token, group, is_group,
+                _gitlab_user, _gitlab_member)
+
+        # This comment's gitlab user. If this variable is not None,
+        # we will sudo as the user. Otherwise, we will post as
+        # the token user in a slightly modified format, pointing
+        # back to the originating flyspray instance.
+        _gitlab_user = None
+
+        # If the Flyspray comment's user's username is found in
+        # the global gitlab users dictionary, set gitlab_user to it.
+        if _user_name not in users:
+            _gitlab_user = users[_user_name] = get_user(args.token, _user_name)
+        else:
+            _gitlab_user = users.get(_user_name)
+
+        date_added = datetime.fromtimestamp(comment.get("date_added"))
+
+        attachments = []
+        if not args.skip_attachments:
+            # Gather attachments by first uploading them to Gitlab,
+            # then storing their information in attachments.
+            attachments = comment.get("attachments")
+            attachments = upload_attachments(
+                args, repo, attachments, args.attachments)
+            logging.debug(f"Uploaded comment attachments: {attachments}.")
+
+        # At this point, attachments should be populated with any attachments
+        # that were originally uploaded to Flyspray's comment.
+
+        # Post the comment to gitlab.
+        _data = {
+            "access_token": args.token,
+            "body": comment_to_note(args, comment, attachments, is_group)
+        }
+
+        if is_group:
+            ds = date_added.isoformat() + "Z"
+            ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
+            _data["created_at"] = ds
+
+        headers = dict()
+        if _gitlab_user:
+            headers["Sudo"] = str(_gitlab_user.get("id"))
+
+        request(requests.post, notes_ep,
+                json=_data, headers=headers)
+
+
 def import_task(args, task, mappings):
     """ Import a single task dictionary to GitLab (provided by flyspray.py).
 
@@ -527,62 +588,8 @@ def import_task(args, task, mappings):
     issue_ep = issue_endpoint(repository, issue_id)
     notes_ep = notes_endpoint(repository, issue_id)
 
-    for comment in task.get("comments"):
-        logging.info(
-            f"Migrating comment {comment.get('comment_id')} to {notes_ep}.")
-
-        _user = comment.get("user")
-        _user_name = _user.get("user_name").lower()
-
-        _gitlab_user = get_user(args.token, _user_name)
-        _gitlab_member = get_member(args.token, group, _user_name)
-        promote(to_restore, to_remove, args.token, group, is_group,
-                _gitlab_user, _gitlab_member)
-
-        # This comment's gitlab user. If this variable is not None,
-        # we will sudo as the user. Otherwise, we will post as
-        # the token user in a slightly modified format, pointing
-        # back to the originating flyspray instance.
-        _gitlab_user = None
-
-        # If the Flyspray comment's user's username is found in
-        # the global gitlab users dictionary, set gitlab_user to it.
-        if _user_name not in users:
-            _gitlab_user = users[_user_name] = get_user(args.token, _user_name)
-        else:
-            _gitlab_user = users.get(_user_name)
-
-        date_added = datetime.fromtimestamp(comment["date_added"], utc)
-
-        attachments = []
-        if not args.skip_attachments:
-            # Gather attachments by first uploading them to Gitlab,
-            # then storing their information in attachments.
-            attachments = comment.get("attachments")
-            attachments = upload_attachments(
-                args, repository, attachments, args.attachments)
-            logging.debug(f"Uploaded comment attachments: {attachments}.")
-
-        # At this point, attachments should be populated with any attachments
-        # that were originally uploaded to Flyspray's comment.
-
-        # Post the comment to gitlab.
-        _data = {
-            "access_token": args.token,
-            "body": comment_to_note(args, comment, attachments, is_group)
-        }
-
-        if is_group:
-            ds = date_added.isoformat() + "Z"
-            ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
-            _data["created_at"] = ds
-
-        headers = dict()
-        if _gitlab_user:
-            headers["Sudo"] = str(_gitlab_user.get("id"))
-
-        response = request(requests.post, notes_ep,
-                           json=_data, headers=headers)
+    import_comments(args, to_restore, to_remove, task, data,
+                    repository, group, is_group, mappings)
 
     if task.get("closed"):
         closed_by = task.get("closed_by")
