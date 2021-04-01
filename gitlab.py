@@ -432,11 +432,10 @@ def import_task(args, task, mappings):
 
     # Check to see if this title already exists in Gitlab.
     summary = task.get("summary")
-    response = requests.get(issues_ep, params={
+    response = request(requests.get, issues_ep, params={
         "access_token": args.token,
         "search": summary
     })
-    assert response.status_code == 200
 
     issues = [
         i for i in json.loads(response.content.decode())
@@ -445,6 +444,7 @@ def import_task(args, task, mappings):
     exists = len(issues) >= 1
 
     if args.keep_ids:
+        # Make sure that no issue with the id exists.
         task_id = task.get("id")
         iids = [int(task_id)]
         response = request(requests.get, issues_ep, params={
@@ -452,11 +452,12 @@ def import_task(args, task, mappings):
             "iids": iids
         })
         _data = json.loads(response.content.decode())
-        logging.error("--keep-ids was used but issue with IID already exists.")
-        logging.error(
-            "To continue, clear out all Gitlab issues in the target "
-            "repository that match Flyspray task IDs or omit --keep-ids.")
-        sys.exit(1)
+        if len(_data) >= 1:
+            raise Exception("--keep-ids was used but an issue with "
+                            f"task id '{task_id}' exists. To continue, remove "
+                            "the offending Gitlab issue in the target "
+                            "repository. Offending issue location: "
+                            f"{_data[0].get('_links').get('self')}.")
 
     if exists:
         logging.error(
@@ -524,7 +525,7 @@ def import_task(args, task, mappings):
         # the global gitlab users dictionary, set gitlab_user to it.
         if _user_name not in users:
             _gitlab_user = users[_user_name] = get_user(args.token, _user_name)
-        elif _user_name in users:
+        else:
             _gitlab_user = users.get(_user_name)
 
         date_added = datetime.fromtimestamp(comment["date_added"], utc)
@@ -601,28 +602,51 @@ def command_import(args, tasks):
     # This mapping can be used to match tasks for redirection purposes.
     iid_mapping = dict()
 
-    try:
-        for task in tasks:
-            project = task.get("project")
-            repo = mappings.get(project, None)
-            if not repo:
-                repo = args.default_target
+    i = 0
+    while i < len(tasks):
+        task = tasks[i]
+        project = task.get("project")
+        repo = mappings.get(project, None)
+        if not repo:
+            repo = args.default_target
 
+        try:
             issue = import_task(args, task, mappings)
+        except Exception:
+            traceback.print_exc()
+            logging.info("We encountered a fatal exception. You have the "
+                         "following options: (R)etry, (n)ext, and (q)uit.")
+            logging.info("")
+            logging.info(" - Retry: Try the failed task again.")
+            logging.info(" - Next: Move on to the next task and continue.")
+            logging.info(" - Quit: Quit the migration.")
+            logging.info("")
+            sys.stdin.buffer.flush()
+            choice = input("Choice (R/n/q): ")
+            if not choice or choice.lower() == 'r':
+                continue
+            elif choice.lower() == 'n':
+                i += 1
+                continue
+            elif choice.lower() == 'q':
+                logging.info("Quitting; good bye!")
+                return 0
 
-            if args.id_mapping_output:
-                # Populate iid_mapping with this task.
-                task_id = str(task.get("id"))
-                if task_id not in iid_mapping:
-                    repo_ep = '/'.join([args.base, repo])
-                    repo_ep += f"/issues/{issue.get('iid')}"
-                    iid_mapping[task_id] = repo_ep
-
+        if args.id_mapping_output:
+            # Populate iid_mapping with this task.
+            task_id = str(task.get("id"))
+            if task_id not in iid_mapping:
+                repo_ep = '/'.join([args.base, repo])
+                repo_ep += f"/issues/{issue.get('iid')}"
+                iid_mapping[task_id] = repo_ep
+        i += 1
+    """
     except Exception:
         traceback.print_exc()
         # Perform task rollback.
         rollback(args)
         return 1
+    """
 
     if args.id_mapping_output:
         with open(args.id_mapping_output, "w") as fh:
@@ -772,11 +796,6 @@ additional information:
   --keep-ids\t\tpersist task ids from FLyspray over to Gitlab
   --id-mapping-output\ta writable path to a json mapping output file of
   \t\t\tFlyspray task ids to Gitlab issue URLs
-
-Example:
-  $ flyspray.py | gitlab.py import -m projects.json
-
-Note: This program reads stdin as input for flyspray json data.
 """
 
     parser = argparse.ArgumentParser(
@@ -811,6 +830,7 @@ Note: This program reads stdin as input for flyspray json data.
                         help="keep task ids from Flyspray")
     parser.add_argument("--id-mapping-output",
                         help="task id to issue url mapping output file")
+    parser.add_argument("--dump-file", required=True, help="dump file")
     parser.add_argument("command", default='',
                         help="primary command (import, dry)")
     return parser.parse_args()
@@ -858,11 +878,12 @@ def main():
     api_base = f"{args.base}/api/{args.api}"
 
     # Process stdin into a json list of task objects.
-    if not stdin_available():
-        return error_log(
-            "Timed out waiting for stdin; input JSON is required.")
+    try:
+        with open(args.dump_file) as fh:
+            stdin = fh.read()
+    except OSError:
+        return error_log("No dump file could be read.")
 
-    stdin = sys.stdin.read()
     tasks = json.loads(stdin)
 
     method = module_method(args.command)
