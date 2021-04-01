@@ -35,7 +35,8 @@ users = dict()
 
 def request(fn, *args, **kwargs):
     response = fn(*args, **kwargs)
-    if response.status_code not in (200, 201):
+    if response.status_code not in (200, 201, 204):
+        logging.error(response.content.decode())
         raise requests.HTTPError(
             f"GitLab API returned '{response.status_code}'.")
     return response
@@ -73,6 +74,22 @@ def notes_endpoint(repo, issue):
     return '/'.join([issue_endpoint(repo, issue), "notes"])
 
 
+def groups_endpoint():
+    return '/'.join([api_base, "groups"])
+
+
+def group_endpoint(group):
+    return '/'.join([groups_endpoint(), group])
+
+
+def members_endpoint(group):
+    return '/'.join([group_endpoint(group), "members"])
+
+
+def member_endpoint(group, user):
+    return '/'.join([group_endpoint(group), "members", str(user.get("id"))])
+
+
 def get_users(token):
     """ Retrieve a json list of users from Gitlab. """
     endpoint = users_endpoint() + f"?access_token={token}"
@@ -87,6 +104,23 @@ def get_user(token, username):
     data = json.loads(response.content.decode())
     if len(data):
         return data[0]
+
+
+def get_member(token, group, username):
+    user = get_user(token, username)
+    ids = []
+    if user:
+        ids.append(int(user.get("id")))
+
+    response = requests.get(members_endpoint(group), params={
+        "access_token": token,
+        "user_ids": ids
+    })
+
+    if response.status_code != 404:
+        data = json.loads(response.content.decode())
+        if len(data):
+            return data[0]
 
 
 def get_user_if_missing(args, username):
@@ -259,17 +293,17 @@ def user_exists(user):
     return user.get("user_name") in users
 
 
-def comment_to_note(args, comment, attachments):
+def comment_to_note(args, comment, attachments, group_owned=False):
     # Links back to the user in this string may not always work. Flyspray
     # does not by default allow all users to be viewed via /user/{id} like
     # bugs.archlinux.org does.
     output = str()
 
-    date_added = comment.get("date_added")
-    date_added = datetime.fromtimestamp(date_added)
-
-    dts = date_added.strftime("%Y-%m-%d %H:%M:%S UTC")
-    output = "<small>Added %s</small>" % dts
+    if not group_owned:
+        date_added = comment.get("date_added")
+        date_added = datetime.fromtimestamp(date_added)
+        dts = date_added.strftime("%Y-%m-%d %H:%M:%S UTC")
+        output += "<small>Added %s</small>" % dts
 
     user = comment.get("user")
     if not get_user_if_missing(args, user.get("user_name")):
@@ -280,12 +314,66 @@ def comment_to_note(args, comment, attachments):
             f"[{user.get('real_name')} ({user.get('user_name')})]"
             f"({args.upstream}/user/{user.get('id')})",
             f"{user.get('real_name')} ({user.get('user_name')})")
-        output += f"<small> - Commented by {commented_by}</small>\n\n"
+        if not group_owned:
+            output += "<small> - </small>"
+        output += f"<small>Commented by {commented_by}</small>\n\n"
 
     output += "\n\n"
     output += comment.get("comment_text") + "\n\n"
     output += attachments_markdown(attachments) + "\n"
     return output
+
+
+class Memory(dict):
+    def __hash__(self):
+        return self.get("id")
+
+    def __eq__(self, o):
+        return self.get("id") == o.get("id")
+
+
+def promote(to_restore, to_remove, token, group, is_group, user, member):
+    if not is_group:
+        return
+
+    if member:
+        # Only change the member's level if it's not 40 yet.
+        if member.get("access_level") != 50:
+            to_restore[Memory(user)] = member.get("access_level")
+            request(requests.put, member_endpoint(group, user), json={
+                "access_token": token,
+                "access_level": 50  # Maintainer
+            })
+            logging.info(f"Updated {user.get('username')} to maintainer")
+    else:
+        to_remove.add(Memory(user))
+        request(requests.post, members_endpoint(group), json={
+            "access_token": token,
+            "user_id": user.get("id"),
+            "access_level": 50  # Maintainer
+        })
+        logging.info(f"Added {user.get('username')} as project member")
+
+
+def restore(to_restore, to_remove, token, group, is_group):
+    if not is_group:
+        return
+
+    for user, access_level in to_restore.items():
+        request(requests.put, member_endpoint(group, user), json={
+            "access_token": token,
+            "access_level": access_level
+        })
+        logging.info(f"Reverted {user.get('username')} to {access_level}.")
+    to_restore = dict()
+
+    users_to_remove = list(to_remove)
+    for user in users_to_remove:
+        request(requests.delete, member_endpoint(group, user), json={
+            "access_token": token
+        })
+        logging.info(f"Removed {user.get('username')} from the project.")
+    to_remove = set()
 
 
 def import_task(args, task, mappings):
@@ -301,9 +389,13 @@ def import_task(args, task, mappings):
     # we created if we can.
     global tasks
 
+    to_restore = dict()
+    to_remove = set()
+
     gitlab_user = None
 
     user_name = task.get("opened_by").get("user_name").lower()
+
     gitlab_user = get_user_if_missing(args, user_name)
 
     logging.info(f"Importing task {task.get('id')}: {task.get('summary')}.")
@@ -318,8 +410,22 @@ def import_task(args, task, mappings):
             f"No mapping found for project '{project}', " +
             f"migrating to default: '{repository}'.")
 
+    group = repository.split('/')[0]
+
     # Get repository ready to be used as :id in /project/:id.
     repository = urllib.parse.quote_plus(repository)
+
+    user = get_user(args.token, user_name)
+    member = get_member(args.token, group, user_name)
+
+    response = request(requests.get, groups_endpoint(), {
+        "access_token": args.token,
+        "search": group
+    })
+
+    is_group = len(json.loads(response.content.decode())) >= 1
+
+    promote(to_restore, to_remove, args.token, group, is_group, user, member)
 
     issues_ep = issues_endpoint(repository)
     logging.info(f"Migrating task {task.get('id')} to {issues_ep}.")
@@ -348,8 +454,8 @@ def import_task(args, task, mappings):
         _data = json.loads(response.content.decode())
         logging.error("--keep-ids was used but issue with IID already exists.")
         logging.error(
-            "To continue, clear out all Gitlab issues in the target repository "
-            "that match Flyspray task IDs or omit --keep-ids.")
+            "To continue, clear out all Gitlab issues in the target "
+            "repository that match Flyspray task IDs or omit --keep-ids.")
         sys.exit(1)
 
     if exists:
@@ -373,11 +479,13 @@ def import_task(args, task, mappings):
     if gitlab_user:
         headers["Sudo"] = str(gitlab_user.get("id"))
 
+    ds = date_opened.isoformat() + "Z"
+    ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
     data = {
         "access_token": args.token,
         "title": task.get("summary"),
         "description": task_to_issue(args, task, attachments),
-        "created_at": date_opened.isoformat(),
+        "created_at": ds,
         "weight": task.get("priority_id")
     }
 
@@ -400,6 +508,11 @@ def import_task(args, task, mappings):
 
         _user = comment.get("user")
         _user_name = _user.get("user_name").lower()
+
+        _gitlab_user = get_user(args.token, _user_name)
+        _gitlab_member = get_member(args.token, group, _user_name)
+        promote(to_restore, to_remove, args.token, group, is_group,
+                _gitlab_user, _gitlab_member)
 
         # This comment's gitlab user. If this variable is not None,
         # we will sudo as the user. Otherwise, we will post as
@@ -429,12 +542,15 @@ def import_task(args, task, mappings):
         # that were originally uploaded to Flyspray's comment.
 
         # Post the comment to gitlab.
-        ds = date_added.isoformat() + "Z"
-        ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
         _data = {
             "access_token": args.token,
-            "body": comment_to_note(args, comment, attachments)
+            "body": comment_to_note(args, comment, attachments, is_group)
         }
+
+        if is_group:
+            ds = date_added.isoformat() + "Z"
+            ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
+            _data["created_at"] = ds
 
         headers = dict()
         if _gitlab_user:
@@ -450,6 +566,9 @@ def import_task(args, task, mappings):
             "state_event": "close"
         })
 
+    # Restore repository members.
+    restore(to_restore, to_remove, args.token, group, is_group)
+
     return data
 
 
@@ -459,17 +578,13 @@ def rollback(args):
 
     global tasks
 
-    # Close issue
+    # Close issue.
     for issue_id, repo in tasks:
-        issue_endpoint = \
-            f"{args.base}/api/{args.api}/projects/{repo}/issues/{issue_id}"
-        response = requests.put(issue_endpoint, json={
+        issue_ep = issue_endpoint(repo, issue_id)
+        request(requests.put, issue_ep, json={
             "access_token": args.token,
             "state_event": "close"
         })
-        if response.status_code != 200:
-            raise requests.HTTPError(
-                f"GitLab API returned '{response.status_code}'.")
 
     tasks.clear()
 
