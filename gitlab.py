@@ -423,7 +423,7 @@ def import_task(args, task, mappings):
         "search": group
     })
 
-    is_group = len(json.loads(response.content.decode())) >= 1
+    is_group = len(json.loads(response.content.decode())) >= 1 and args.promote
 
     promote(to_restore, to_remove, args.token, group, is_group, user, member)
 
@@ -833,6 +833,8 @@ additional information:
     parser.add_argument("--dump-file", required=True, help="dump file")
     parser.add_argument("command", default='',
                         help="primary command (import, dry)")
+    parser.add_argument("--promote", default=False,
+                        help="enable owner promotion")
     return parser.parse_args()
 
 
