@@ -23,7 +23,7 @@ import select
 import requests
 import pytz
 import urllib
-from datetime import datetime
+from datetime import datetime, timezone
 from signal import signal, SIGPIPE, SIG_DFL
 from prettytable import PrettyTable
 
@@ -448,7 +448,7 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
         }
 
         if is_group:
-            ds = date_added.isoformat() + "Z"
+            ds = date_added.astimezone(timezone.utc).isoformat() + "Z"
             ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
             _data["created_at"] = ds
 
@@ -564,7 +564,7 @@ def import_task(args, task, mappings):
     if gitlab_user:
         headers["Sudo"] = str(gitlab_user.get("id"))
 
-    ds = date_opened.isoformat() + "Z"
+    ds = date_opened.astimezone(timezone.utc).isoformat() + "Z"
     ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
     data = {
         "access_token": args.token,
@@ -590,6 +590,8 @@ def import_task(args, task, mappings):
     import_comments(args, to_restore, to_remove, task, data,
                     repository, group, is_group, mappings)
 
+    date_closed = datetime.fromtimestamp(
+        int(task.get("date_closed")))
     if task.get("closed"):
         closed_by = task.get("closed_by")
         _user = get_user(args.token, closed_by.get("user_name"))
@@ -604,11 +606,8 @@ def import_task(args, task, mappings):
                 "body": close_comment(args, task, is_group)
             }
 
-            date_closed = datetime.fromtimestamp(
-                int(task.get("date_closed")))
-
             if is_group:
-                ds = date_closed.isoformat() + "Z"
+                ds = date_closed.astimezone(timezone.utc).isoformat() + "Z"
                 ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
                 _data["created_at"] = ds
 
@@ -625,8 +624,11 @@ def import_task(args, task, mappings):
             headers["Sudo"] = str(_user.get("id"))
 
         # Then close it by updating the issue's state to 'close'.
+        ds = date_closed.astimezone(timezone.utc).isoformat() + "Z"
+        ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
         request(requests.put, issue_ep, json={
             "access_token": args.token,
+            "updated_at": ds,
             "state_event": "close"
         }, headers=headers)
 
