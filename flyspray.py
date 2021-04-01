@@ -206,11 +206,20 @@ WHERE task_id = {task['id']}
     # query so we can delete keys ourselves.
     user = users.get(task["opened_by"])
 
-    del user["user_pass"]
-    del user["dateformat"]
-    del user["dateformat_extended"]
-    del user["register_date"]
-    del user["time_zone"]
+    if "user_pass" in user:
+        del user["user_pass"]
+
+    if "dateformat" in user:
+        del user["dateformat"]
+
+    if "dateformat_extended" in user:
+        del user["dateformat_extended"]
+
+    if "register_date" in user:
+        del user["register_date"]
+
+    if "time_zone" in user:
+        del user["time_zone"]
 
     if user:
         task["opened_by"] = user
