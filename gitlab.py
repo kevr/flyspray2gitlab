@@ -30,6 +30,8 @@ from prettytable import PrettyTable
 api_base = None
 tasks = []
 users = dict()
+gitlab_users = dict()
+gitlab_members = dict()
 
 
 def request(fn, *args, **kwargs):
@@ -97,38 +99,44 @@ def get_users(token):
 
 
 def get_user(token, username):
-    endpoint = users_endpoint() + f"?username={username}"
-    response = requests.get(endpoint)
+    global gitlab_users
 
-    data = json.loads(response.content.decode())
-    if len(data):
-        return data[0]
+    if username not in gitlab_users:
+        endpoint = users_endpoint() + f"?username={username}"
+        response = requests.get(endpoint)
+
+        data = json.loads(response.content.decode())
+        if len(data):
+            gitlab_users[username] = data[0]
+
+    return gitlab_users.get(username, None)
 
 
 def get_member(token, group, username):
-    user = get_user(token, username)
-    ids = []
-    if user:
-        ids.append(int(user.get("id")))
+    global gitlab_members
 
-    response = requests.get(members_endpoint(group), params={
-        "access_token": token,
-        "user_ids": ids
-    })
+    key = f"{group}--{username}"
+    if key not in gitlab_members:
+        user = get_user(token, username)
+        ids = []
+        if user:
+            ids.append(int(user.get("id")))
 
-    if response.status_code != 404:
-        data = json.loads(response.content.decode())
-        if len(data):
-            return data[0]
+        response = requests.get(members_endpoint(group), params={
+            "access_token": token,
+            "user_ids": ids
+        })
+
+        if response.status_code != 404:
+            data = json.loads(response.content.decode())
+            if len(data):
+                gitlab_members[key] = data[0]
+
+    return gitlab_members.get(key, None)
 
 
 def get_user_if_missing(args, username):
-    global users
-    if username not in users:
-        users[username] = get_user(args.token, username)
-        return users.get(username)
-    elif username in users:
-        return users.get(username)
+    return get_user(args.token, username)
 
 
 def error_log(*args, **kwargs):
