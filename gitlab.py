@@ -29,7 +29,6 @@ from prettytable import PrettyTable
 
 api_base = None
 tasks = []
-users = dict()
 gitlab_users = dict()
 gitlab_members = dict()
 
@@ -423,10 +422,10 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
 
         # If the Flyspray comment's user's username is found in
         # the global gitlab users dictionary, set gitlab_user to it.
-        if _user_name not in users:
-            _gitlab_user = users[_user_name] = get_user(args.token, _user_name)
+        if _user_name not in gitlab_users:
+            _gitlab_user = get_user(args.token, _user_name)
         else:
-            _gitlab_user = users.get(_user_name)
+            _gitlab_user = gitlab_users.get(_user_name)
 
         date_added = datetime.fromtimestamp(comment.get("date_added"))
 
