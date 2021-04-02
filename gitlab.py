@@ -135,10 +135,6 @@ def get_member(token, group, username):
     return gitlab_members.get(key, None)
 
 
-def get_user_if_missing(args, username):
-    return get_user(args.token, username)
-
-
 def error_log(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
     return 1
@@ -254,11 +250,12 @@ def get_if(fn, a, b):
 def task_to_issue(args, task, attachments):
     user = task.get("opened_by")
 
+    opened_by_username = task.get("opened_by").get("user_name").lower()
     opened_by = get_if(lambda: args.upstream,
                        f"[{user.get('real_name')} ({user.get('user_name')})]"
                        f"({args.upstream}/user/{user.get('id')})",
                        f"{user.get('real_name')} ({user.get('user_name')})") \
-        if not user_exists(task["opened_by"]) else \
+        if not get_user(args.token, opened_by_username) else \
         f"{user.get('real_name')} ({user.get('user_name')})"
 
     header = ["Task Info (Flyspray)", ""]
@@ -296,10 +293,6 @@ def task_to_issue(args, task, attachments):
 """
 
 
-def user_exists(user):
-    return user.get("user_name") in users
-
-
 def close_comment(args, task, group_owned=False):
     output = str()
 
@@ -309,7 +302,7 @@ def close_comment(args, task, group_owned=False):
         output += "<small>Added %s</small>" % dts
 
     user = task.get("closed_by")
-    if not get_user_if_missing(args, user.get("user_name")):
+    if not get_user(args.token, user.get("user_name").lower()):
         commented_by = get_if(
             lambda: args.upstream,
             f"[{user.get('name')} ({user.get('username')})]"
@@ -337,7 +330,7 @@ def comment_to_note(args, comment, attachments, group_owned=False):
         output += "<small>Added %s</small>" % dts
 
     user = comment.get("user")
-    if not get_user_if_missing(args, user.get("user_name")):
+    if not get_user(args.token, user.get("user_name").lower()):
         # If the user can't be found on gitlab, reference back
         # to them via the upstream format.
         commented_by = get_if(
@@ -488,7 +481,7 @@ def import_task(args, task, mappings):
 
     user_name = task.get("opened_by").get("user_name").lower()
 
-    gitlab_user = get_user_if_missing(args, user_name)
+    gitlab_user = get_user(args.token, user_name)
 
     logging.info(f"Importing task {task.get('id')}: {task.get('summary')}.")
     project = task.get("project")
@@ -628,7 +621,7 @@ def import_task(args, task, mappings):
                                json=_data, headers=headers)
 
         headers = dict()
-        if get_user_if_missing(args, _user.get("username")):
+        if get_user(args.token, _user.get("username").lower()):
             headers["Sudo"] = str(_user.get("id"))
 
         # Then close it by updating the issue's state to 'close'.
