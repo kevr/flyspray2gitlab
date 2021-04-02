@@ -97,9 +97,6 @@ def member_endpoint(group, user):
     return '/'.join([group_endpoint(group), "members", str(user.get("id"))])
 
 
-email_settings = dict()
-
-
 def disable_email(token, path):
     global email_settings
     endpoint = project_endpoint(path)
@@ -120,7 +117,6 @@ def restore_email(token, path, mode):
     global email_settings
     endpoint = project_endpoint(path)
     if path in email_settings:
-        print(endpoint)
         return request(requests.put, endpoint, json={
             "access_token": token,
             "emails_disabled": mode
