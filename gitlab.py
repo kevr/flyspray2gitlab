@@ -32,6 +32,13 @@ tasks = []
 gitlab_users = dict()
 gitlab_members = dict()
 
+to_restore = dict()
+to_remove = set()
+
+email_settings = dict()
+
+repositories = set()
+
 
 def request(fn, *args, **kwargs):
     response = fn(*args, **kwargs)
@@ -55,7 +62,7 @@ def user_endpoint():
 
 
 def project_endpoint(repo):
-    return '/'.join([api_base, f"projects/{repo}"])
+    return '/'.join([api_base, "projects", repo])
 
 
 def upload_endpoint(repo):
@@ -88,6 +95,42 @@ def members_endpoint(group):
 
 def member_endpoint(group, user):
     return '/'.join([group_endpoint(group), "members", str(user.get("id"))])
+
+
+email_settings = dict()
+
+
+def disable_email(token, path):
+    global email_settings
+    endpoint = project_endpoint(path)
+    response = request(requests.get, endpoint, {
+        "access_token": token
+    })
+    data = json.loads(response.content.decode())
+    email_settings[path] = data.get("emails_disabled")
+
+    if not email_settings.get(path):
+        return request(requests.put, endpoint, json={
+            "access_token": token,
+            "emails_disabled": True
+        })
+
+
+def restore_email(token, path, mode):
+    global email_settings
+    endpoint = project_endpoint(path)
+    if path in email_settings:
+        print(endpoint)
+        return request(requests.put, endpoint, json={
+            "access_token": token,
+            "emails_disabled": mode
+        })
+
+
+def restore_emails(token):
+    global email_settings
+    for path, on in email_settings.items():
+        restore_email(token, path, on)
 
 
 def get_users(token):
@@ -355,9 +398,15 @@ class Memory(dict):
         return self.get("id") == o.get("id")
 
 
-def promote(to_restore, to_remove, token, group, is_group, user, member):
+def promote(token, repository, group, is_group, user, member):
     if not is_group:
         return
+
+    global to_restore
+    global to_remove
+    global repositories
+
+    repositories.add((repository, group, is_group))
 
     if member:
         # Only change the member's level if it's not 40 yet.
@@ -378,9 +427,16 @@ def promote(to_restore, to_remove, token, group, is_group, user, member):
         logging.info(f"Added {user.get('username')} as project member")
 
 
-def restore(to_restore, to_remove, token, group, is_group):
+def restore(token, repository, group, is_group):
+    global to_restore
+    global to_remove
+    global email_settings
+
     if not is_group:
         return
+
+    if len(to_restore):
+        logging.info("Restoring access levels to those updated...")
 
     for user, access_level in to_restore.items():
         request(requests.put, member_endpoint(group, user), json={
@@ -391,12 +447,21 @@ def restore(to_restore, to_remove, token, group, is_group):
     to_restore = dict()
 
     users_to_remove = list(to_remove)
+    if len(users_to_remove):
+        logging.info("Removing users we added...")
+
     for user in users_to_remove:
         request(requests.delete, member_endpoint(group, user), json={
             "access_token": token
         })
         logging.info(f"Removed {user.get('username')} from the project.")
     to_remove = set()
+
+    if len(email_settings):
+        logging.info("Restoring email settings we updated...")
+
+    restore_emails(token)
+    email_settings = dict()
 
 
 def import_comments(args, to_restore, to_remove, task, issue, repo, group,
@@ -411,7 +476,7 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
 
         _gitlab_user = get_user(args.token, _user_name)
         _gitlab_member = get_member(args.token, group, _user_name)
-        promote(to_restore, to_remove, args.token, group, is_group,
+        promote(args.token, repo, group, is_group,
                 _gitlab_user, _gitlab_member)
 
         # This comment's gitlab user. If this variable is not None,
@@ -472,9 +537,8 @@ def import_task(args, task, mappings):
     # In case we ever error out, we'll use it to delete the tasks
     # we created if we can.
     global tasks
-
-    to_restore = dict()
-    to_remove = set()
+    global to_restore
+    global to_remove
 
     gitlab_user = None
 
@@ -509,7 +573,7 @@ def import_task(args, task, mappings):
 
     is_group = len(json.loads(response.content.decode())) >= 1 and args.promote
 
-    promote(to_restore, to_remove, args.token, group, is_group, user, member)
+    promote(args.token, repository, group, is_group, user, member)
 
     issues_ep = issues_endpoint(repository)
     logging.info(f"Migrating task {task.get('id')} to {issues_ep}.")
@@ -537,6 +601,7 @@ def import_task(args, task, mappings):
         })
         _data = json.loads(response.content.decode())
         if len(_data) >= 1:
+            restore(args.token, repository, group, is_group)
             raise Exception("--keep-ids was used but an issue with "
                             f"task id '{task_id}' exists. To continue, remove "
                             "the offending Gitlab issue in the target "
@@ -577,6 +642,9 @@ def import_task(args, task, mappings):
     if args.keep_ids:
         data["iid"] = task.get("id")
 
+    # Disable notifications on this project.
+    disable_email(args.token, repository)
+
     response = request(requests.post, issues_ep, json=data, headers=headers)
 
     data = response.json()
@@ -598,7 +666,7 @@ def import_task(args, task, mappings):
         closed_by_member = get_member(args.token, group,
                                       closed_by.get("username"))
 
-        promote(to_restore, to_remove, args.token, group, is_group,
+        promote(args.token, repository, group, is_group,
                 closed_by, closed_by_member)
         if task.get("closure_comment"):
             _data = {
@@ -633,7 +701,7 @@ def import_task(args, task, mappings):
         }, headers=headers)
 
     # Restore repository members.
-    restore(to_restore, to_remove, args.token, group, is_group)
+    restore(args.token, repository, group, is_group)
 
     return data
 
@@ -656,8 +724,16 @@ def rollback(args):
     tasks.clear()
 
 
+def restore_all(token):
+    global repositories
+    for repo, group, is_group in repositories:
+        restore(token, repo, group, is_group)
+    repositories = set()
+
+
 def command_import(args, tasks):
     """ Run the import command. """
+    global repositories
 
     logging.debug("Import triggered.")
     mappings = dict()
@@ -678,7 +754,9 @@ def command_import(args, tasks):
 
         try:
             issue = import_task(args, task, mappings)
-        except Exception:
+        except (Exception, KeyboardInterrupt):
+            restore_all(args.token)
+
             traceback.print_exc()
             logging.info("We encountered a fatal exception. You have the "
                          "following options: (R)etry, (n)ext, and (q)uit.")
@@ -687,13 +765,14 @@ def command_import(args, tasks):
             logging.info(" - Next: Move on to the next task and continue.")
             logging.info(" - Quit: Quit the migration.")
             logging.info("")
-            sys.stdin.buffer.flush()
+
             try:
                 choice = input("Choice (R/n/q): ")
             except (Exception, KeyboardInterrupt):
                 logging.error(
                     "Caught another exception during input, rolling back.")
                 rollback(args)
+                restore_all(args.token)
                 return 1
             if not choice or choice.lower() == 'r':
                 continue
@@ -703,6 +782,7 @@ def command_import(args, tasks):
             elif choice.lower() == 'q':
                 logging.info("Rolling back...")
                 rollback(args)
+                restore_all(args.token)
                 logging.info("Good bye!")
                 return 0
 
