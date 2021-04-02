@@ -646,11 +646,12 @@ def rollback(args):
 
     # Close issue.
     for issue_id, repo in tasks:
+        logging.info("Removing issue with ID '%s'." % issue_id)
         issue_ep = issue_endpoint(repo, issue_id)
-        request(requests.put, issue_ep, json={
-            "access_token": args.token,
-            "state_event": "close"
+        request(requests.delete, issue_ep, json={
+            "access_token": args.token
         })
+        logging.info("Removed issue with ID '%s'." % issue_id)
 
     tasks.clear()
 
@@ -687,14 +688,22 @@ def command_import(args, tasks):
             logging.info(" - Quit: Quit the migration.")
             logging.info("")
             sys.stdin.buffer.flush()
-            choice = input("Choice (R/n/q): ")
+            try:
+                choice = input("Choice (R/n/q): ")
+            except (Exception, KeyboardInterrupt):
+                logging.error(
+                    "Caught another exception during input, rolling back.")
+                rollback(args)
+                return 1
             if not choice or choice.lower() == 'r':
                 continue
             elif choice.lower() == 'n':
                 i += 1
                 continue
             elif choice.lower() == 'q':
-                logging.info("Quitting; good bye!")
+                logging.info("Rolling back...")
+                rollback(args)
+                logging.info("Good bye!")
                 return 0
 
         if args.id_mapping_output:
@@ -705,13 +714,6 @@ def command_import(args, tasks):
                 repo_ep += f"/issues/{issue.get('iid')}"
                 iid_mapping[task_id] = repo_ep
         i += 1
-    """
-    except Exception:
-        traceback.print_exc()
-        # Perform task rollback.
-        rollback(args)
-        return 1
-    """
 
     if args.id_mapping_output:
         with open(args.id_mapping_output, "w") as fh:
