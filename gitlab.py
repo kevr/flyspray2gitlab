@@ -221,7 +221,7 @@ def attachments_markdown(attachments):
     return attachment_md
 
 
-def upload_attachment(args, repository, attachment, root):
+def upload_attachment(args, repository, user, attachment, root):
     """ Upload an attachment to GitLab.
 
     @param args The result of ArgumentParser.parse_args
@@ -242,11 +242,15 @@ def upload_attachment(args, repository, attachment, root):
     }
 
     # And use it to upload a new file to the designated project.
-    upload_ep = upload_endpoint(repository)
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {args.token}"
     }
+
+    if user:
+        headers["Sudo"] = str(user.get("id"))
+
+    upload_ep = upload_endpoint(repository)
 
     logging.info("Uploading attachment " +
                  f"{attachment.get('attachment_id')} to {upload_ep}.")
@@ -257,9 +261,12 @@ def upload_attachment(args, repository, attachment, root):
     return {"name": orig_name, "path": data.get("full_path")}
 
 
-def upload_attachments(args, repository, attachments, root):
+def upload_attachments(args, repository, user, attachments, root):
     """ Upload a list of attachments. """
-    return [upload_attachment(args, repository, a, root) for a in attachments]
+    return [
+        upload_attachment(args, repository, user, a, root)
+        for a in attachments
+    ]
 
 
 def raw_markdown_table(header, rows):
@@ -496,7 +503,7 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
             # then storing their information in attachments.
             attachments = comment.get("attachments")
             attachments = upload_attachments(
-                args, repo, attachments, args.attachments)
+                args, repo, _gitlab_user, attachments, args.attachments)
             logging.debug(f"Uploaded comment attachments: {attachments}.")
 
         # At this point, attachments should be populated with any attachments
@@ -618,7 +625,7 @@ def import_task(args, task, mappings):
     if not args.skip_attachments:
         attachments = task.get("attachments")
         attachments = upload_attachments(
-            args, repository, attachments, args.attachments)
+            args, repository, gitlab_user, attachments, args.attachments)
         logging.debug(f"Uploaded task attachments: {attachments}.")
 
     headers = dict()
