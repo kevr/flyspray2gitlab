@@ -310,14 +310,31 @@ def task_to_issue(args, task, attachments):
     rows = [
         ["Opened By", opened_by],
         ["Task ID", task.get("id")],
-        ["Status", task.get("status")],
         ["Type", task.get("type")],
         ["Project", task.get("project")],
         ["Category", task.get("category")],
         ["Version", task.get("version")],
         ["OS", task.get("os")],
-        ["Opened", dts]
+        ["Opened", dts],
+        ["Status", task.get("status")],
     ]
+
+    if task.get("assignee") and not get_user(args.token,
+                                             task.get("assignee")
+                                             .get("user_name")
+                                             .lower()):
+        # In this case, there is no assigned user to the Gitlab issue.
+        # Back-reference to the original user @ upstream.
+        assignee = task.get("assignee")
+        text = get_if(lambda: args.upstream,
+                      f"[{assignee.get('real_name')} "
+                      f"({assignee.get('user_name')})]"
+                      f"({args.upstream}/user/{assignee.get('id')})",
+                      f"{assignee.get('real_name')} "
+                      f"({assignee.get('user_name')})") \
+            if not get_user(args.token, opened_by_username) else \
+            f"{assignee.get('real_name')} ({assignee.get('user_name')})"
+        rows.append(["Assignee", text])
 
     table = raw_markdown_table(header, rows)
 
