@@ -380,9 +380,7 @@ def task_to_issue(args, task, attachments):
                       f"({assignee.get('user_name')})]"
                       f"({args.upstream}/user/{assignee.get('id')})",
                       f"{assignee.get('real_name')} "
-                      f"({assignee.get('user_name')})") \
-            if not get_user(args.token, opened_by_username) else \
-            f"{assignee.get('real_name')} ({assignee.get('user_name')})"
+                      f"({assignee.get('user_name')})")
         rows.append(["Assignee", text])
 
     table = raw_markdown_table(header, rows)
