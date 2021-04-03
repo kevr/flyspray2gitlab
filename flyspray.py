@@ -162,6 +162,32 @@ def task_convert(task, users=dict()):
     }
 
 
+def user_middleware(prefix, user):
+    return user
+
+
+def task_middleware(prefix, task):
+    task["assignee"] = None
+    with connection.cursor() as cursor:
+        sql = f"""
+SELECT task_id, user_id FROM {prefix}assigned
+WHERE task_id = %s
+"""
+        cursor.execute(sql, args=[task.get("id")])
+        result = cursor.fetchone()
+
+    if result:
+        task_id, user_id = result
+        sql = user_query(None, None, prefix, "WHERE user_id = %s")
+        with connection.cursor() as cursor:
+            cursor.execute(sql, args=[user_id])
+            result = cursor.fetchone()
+
+        task["assignee"] = user_convert(result)
+
+    return task
+
+
 def task_attachments(database, prefix, task):
     """ Fetch attachments related to a task returned by task_convert. """
     sql = f"""SELECT
@@ -214,21 +240,6 @@ WHERE task_id = {task['id']}
     # query so we can delete keys ourselves.
     user = users.get(task["opened_by"])
 
-    if "user_pass" in user:
-        del user["user_pass"]
-
-    if "dateformat" in user:
-        del user["dateformat"]
-
-    if "dateformat_extended" in user:
-        del user["dateformat_extended"]
-
-    if "register_date" in user:
-        del user["register_date"]
-
-    if "time_zone" in user:
-        del user["time_zone"]
-
     if user:
         task["opened_by"] = user
 
@@ -269,9 +280,14 @@ WHERE task_id = {task['id']}
     return task
 
 
-def user_query(args, database, prefix):
+def user_query(args, database, prefix, where=str()):
     """ Return SQL used to fetch a user from Flyspray's DB. """
-    return f"SELECT * FROM {prefix}users"
+    return f"""SELECT user_id, user_name, real_name, email_address,
+account_enabled, dateformat, dateformat_extended, magic_url,
+register_date, time_zone
+FROM {prefix}users
+{where}
+"""
 
 
 def user_convert(user):
@@ -279,16 +295,14 @@ def user_convert(user):
     return {
         "id": user[0],
         "user_name": user[1],
-        "user_pass": user[2],
-        "real_name": user[3],
-        "jabber_id": user[4],
-        "email_address": user[5],
-        "account_enabled": bool(user[8]),
-        "dateformat": user[9],
-        "dateformat_extended": user[10],
-        "magic_url": user[11],
-        "register_date": user[13],
-        "time_zone": user[14]
+        "real_name": user[2],
+        "email_address": user[3],
+        "account_enabled": bool(user[4]),
+        "dateformat": user[5],
+        "dateformat_extended": user[6],
+        "magic_url": user[7],
+        "register_date": user[8],
+        "time_zone": user[9]
     }
 
 
@@ -310,6 +324,11 @@ def get_target(nargs, database, prefix, table, *args):
         "tasks": task_convert
     }
 
+    middlewares = {
+        "users": user_middleware,
+        "tasks": task_middleware
+    }
+
     destructors = {
         "users": user_finalize,
         "tasks": task_finalize
@@ -321,13 +340,15 @@ def get_target(nargs, database, prefix, table, *args):
     f = criterion.get(table)
     convert = converters.get(table)
     destructor = destructors.get(table)
+    middleware = middlewares.get(table)
 
     sql = f(nargs, database, prefix)
     with connection.cursor() as cursor:
         cursor.execute(sql)
         results = cursor.fetchall()
         return [
-            destructor(database, prefix, convert(result), *args)
+            destructor(database, prefix,
+                       middleware(prefix, convert(result)), *args)
             for result in results
         ]
 

@@ -625,6 +625,13 @@ def import_task(args, task, mappings):
     if gitlab_user:
         headers["Sudo"] = str(gitlab_user.get("id"))
 
+    assignees = []
+    if task.get("assignee"):
+        _gitlab_user = get_user(args.token,
+                                task.get("assignee").get("user_name").lower())
+        if _gitlab_user:
+            assignees.append(_gitlab_user.get("id"))
+
     ds = date_opened.astimezone(timezone.utc).isoformat() + "Z"
     ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
     data = {
@@ -633,7 +640,8 @@ def import_task(args, task, mappings):
         "description": task_to_issue(args, task, attachments),
         "created_at": ds,
         "weight": task.get("priority_id"),
-        "confidential": bool(task.get("mark_private"))
+        "confidential": bool(task.get("mark_private")),
+        "assignee_ids": assignees
     }
 
     if args.keep_ids:
