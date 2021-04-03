@@ -18,6 +18,7 @@ import re
 from signal import signal, SIGPIPE, SIG_DFL
 
 connection = None
+prefix = "flyspray_"
 
 
 def pg_connect(host, port, user, password, db):
@@ -133,6 +134,21 @@ lv.version_name, os.os_name
 """
 
 
+def dependencies_query(where=str()):
+    return f"SELECT task_id, dep_task_id FROM {prefix}dependencies {where}"
+
+
+def get_dependencies(task):
+    sql = dependencies_query("WHERE task_id = %s")
+    return execute(sql, task.get("id"))
+
+
+def execute(*args, **kwargs):
+    with connection.cursor() as cursor:
+        cursor.execute(*args, **kwargs)
+        return cursor.fetchall()
+
+
 def task_convert(task, users=dict()):
     """ Convert a result of task_query() to Python dictionary. """
     return {
@@ -185,6 +201,7 @@ WHERE task_id = %s
 
         task["assignee"] = user_convert(result)
 
+    task["dependencies"] = [dep[1] for dep in get_dependencies(task)]
     return task
 
 
@@ -375,6 +392,9 @@ def main():
     parser.add_argument("--project-id", dest="project_id",
                         help="specific project id (optional)")
     args = parser.parse_args()
+
+    global prefix
+    prefix = args.prefix
 
     try:
         connect(args.db_type, args.host, args.port,

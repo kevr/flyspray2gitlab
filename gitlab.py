@@ -28,7 +28,7 @@ from signal import signal, SIGPIPE, SIG_DFL
 from prettytable import PrettyTable
 
 api_base = None
-tasks = []
+
 gitlab_users = dict()
 gitlab_members = dict()
 
@@ -38,6 +38,10 @@ to_remove = set()
 email_settings = dict()
 
 repositories = set()
+
+dependencies = dict()
+
+tasks = list()
 
 
 def request(fn, *args, **kwargs):
@@ -74,7 +78,11 @@ def issues_endpoint(repo):
 
 
 def issue_endpoint(repo, issue):
-    return '/'.join([issues_endpoint(repo), f"{issue}"])
+    return '/'.join([issues_endpoint(repo), str(issue)])
+
+
+def issue_links_endpoint(repo, issue):
+    return '/'.join([issue_endpoint(repo, issue), "links"])
 
 
 def notes_endpoint(repo, issue):
@@ -171,6 +179,47 @@ def get_member(token, group, username):
                 gitlab_members[key] = data[0]
 
     return gitlab_members.get(key, None)
+
+
+def get_issue(token, group, iid):
+    endpoint = issue_endpoint(group, iid)
+    response = request(requests.get, endpoint, params={
+        "access_token": token
+    })
+    return json.loads(response.content.decode())
+
+
+def apply_dependencies(args, mappings, tasks, issues):
+    for task in tasks:
+        project = task.get("project")
+        repo = mappings.get(project, None)
+        if not repo:
+            repo = args.default_target
+
+        task_id = task.get("id")
+        user = task.get("opened_by")
+
+        headers = dict()
+        gitlab_user = get_user(args.token, user.get("user_name").lower())
+        if gitlab_user:
+            headers["Sudo"] = str(gitlab_user.get("id"))
+
+        quoted_repo = urllib.parse.quote_plus(repo)
+        issue = issues.get(str(task_id))
+        endpoint = issue_links_endpoint(quoted_repo, str(issue.get("iid")))
+
+        for dep in task.get("dependencies"):
+            data = {
+                "access_token": args.token,
+                "target_project_id": repo,
+                "target_issue_iid": issues.get(str(dep)).get("iid")
+            }
+            logging.info("Applying dependency '%s' to '%s'." % (
+                issues.get(str(dep)).get("title"),
+                issues.get(str(task_id)).get("title")
+            ))
+            logging.info(endpoint)
+            request(requests.post, endpoint, json=data, headers=headers)
 
 
 def error_log(*args, **kwargs):
@@ -772,6 +821,7 @@ def command_import(args, tasks):
     # A mapping of flyspray task ids to gitlab issue ids.
     # This mapping can be used to match tasks for redirection purposes.
     iid_mapping = dict()
+    issues = dict()
 
     i = 0
     while i < len(tasks):
@@ -783,6 +833,7 @@ def command_import(args, tasks):
 
         try:
             issue = import_task(args, task, mappings)
+            issues[str(task.get("id"))] = issue
         except (Exception, KeyboardInterrupt):
             restore_all(args.token)
 
@@ -823,6 +874,8 @@ def command_import(args, tasks):
                 repo_ep += f"/issues/{issue.get('iid')}"
                 iid_mapping[task_id] = repo_ep
         i += 1
+
+    apply_dependencies(args, mappings, tasks, issues)
 
     if args.id_mapping_output:
         with open(args.id_mapping_output, "w") as fh:
