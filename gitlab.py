@@ -632,7 +632,8 @@ def import_task(args, task, mappings):
         "title": task.get("summary"),
         "description": task_to_issue(args, task, attachments),
         "created_at": ds,
-        "weight": task.get("priority_id")
+        "weight": task.get("priority_id"),
+        "confidential": bool(task.get("mark_private"))
     }
 
     if args.keep_ids:

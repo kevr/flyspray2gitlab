@@ -111,7 +111,8 @@ lv.version_name,
 os.os_name,
 t.closed_by,
 t.closure_comment,
-t.date_closed
+t.date_closed,
+t.mark_private
 FROM {prefix}tasks t
 LEFT OUTER JOIN {prefix}users u ON u.user_id = t.opened_by
 LEFT OUTER JOIN {prefix}assigned a ON a.task_id = t.task_id
@@ -154,6 +155,7 @@ def task_convert(task, users=dict()):
         "closed_by": task[16],
         "closure_comment": task[17],
         "date_closed": task[18],
+        "mark_private": task[19],
 
         # Some extra customized fields.
         "tags": parse_tags(task[4])
