@@ -21,7 +21,6 @@ import json
 import logging
 import select
 import requests
-import pytz
 import urllib
 from datetime import datetime, timezone
 from signal import signal, SIGPIPE, SIG_DFL
@@ -192,9 +191,7 @@ def get_issue(token, group, iid):
 def apply_dependencies(args, mappings, tasks, issues):
     for task in tasks:
         project = task.get("project")
-        repo = mappings.get(project, None)
-        if not repo:
-            repo = args.default_target
+        repo = mappings.get(project, args.default_target)
 
         task_id = task.get("id")
         user = task.get("opened_by")
@@ -354,8 +351,7 @@ def task_to_issue(args, task, attachments):
 
     header = ["Task Info (Flyspray)", ""]
 
-    dts = datetime.fromtimestamp(task.get("date_opened"))
-    dts = dts.strftime("%Y-%m-%d %H:%M:%S UTC")
+    dts = make_datetime(task.get("date_opened"))
     rows = [
         ["Opened By", opened_by],
         ["Task ID", task.get("id")],
@@ -364,7 +360,7 @@ def task_to_issue(args, task, attachments):
         ["Category", task.get("category")],
         ["Version", task.get("version")],
         ["OS", task.get("os")],
-        ["Opened", dts],
+        ["Opened", dts.strftime("%Y-%m-%d %H:%M:%S UTC")],
         ["Status", task.get("status")],
     ]
 
@@ -406,7 +402,7 @@ def close_comment(args, task, group_owned=False):
     output = str()
 
     if not group_owned:
-        date_closed = datetime.fromtimestamp(int(task.get("date_closed")))
+        date_closed = make_datetime(task.get("date_closed"))
         dts = date_closed.strftime("%Y-%m-%d %H:%M:%S UTC")
         output += "<small>Added %s</small>" % dts
 
@@ -433,8 +429,7 @@ def comment_to_note(args, comment, attachments, group_owned=False):
     output = str()
 
     if not group_owned:
-        date_added = comment.get("date_added")
-        date_added = datetime.fromtimestamp(date_added)
+        date_added = make_datetime(comment.get("date_added"))
         dts = date_added.strftime("%Y-%m-%d %H:%M:%S UTC")
         output += "<small>Added %s</small>" % dts
 
@@ -559,7 +554,7 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
         else:
             _gitlab_user = gitlab_users.get(_user_name)
 
-        date_added = datetime.fromtimestamp(comment.get("date_added"))
+        date_added = make_datetime(comment.get("date_added"))
 
         attachments = []
         if not args.skip_attachments:
@@ -580,9 +575,7 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
         }
 
         if is_group:
-            ds = date_added.astimezone(timezone.utc).isoformat() + "Z"
-            ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
-            _data["created_at"] = ds
+            _data["created_at"] = make_gitlab_time(date_added)
 
         headers = dict()
         if _gitlab_user:
@@ -590,6 +583,15 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
 
         request(requests.post, notes_ep,
                 json=_data, headers=headers)
+
+
+def make_datetime(timestamp):
+    return datetime.fromtimestamp(timestamp).astimezone(timezone.utc)
+
+
+def make_gitlab_time(datetime):
+    string = datetime.astimezone(timezone.utc).isoformat() + "Z"
+    return re.sub(r'\+\d{2}:\d{2}', '', string)
 
 
 def import_task(args, task, mappings):
@@ -607,40 +609,38 @@ def import_task(args, task, mappings):
     global to_restore
     global to_remove
 
-    gitlab_user = None
-
+    # Task-opening username.
     user_name = task.get("opened_by").get("user_name").lower()
 
+    # Gitlab user, if it exists. If it does not, None.
     gitlab_user = get_user(args.token, user_name)
 
     logging.info(f"Importing task {task.get('id')}: {task.get('summary')}.")
-    project = task.get("project")
-    mapping = mappings.get(project, None)
+    project = task.get("project")  # Flyspray project name.
 
-    repository = args.default_target
-    if mapping:
-        repository = mapping
-    else:
-        logging.error(
-            f"No mapping found for project '{project}', " +
-            f"migrating to default: '{repository}'.")
+    # Take our given --default-target or project mapping provided
+    # via -m (--project-mappings).
+    repository = mappings.get(project, args.default_target)
+    logging.info(f"Resolved target '{repository}' for '{project}'.")
 
+    # Extract  the 'group' part of our target repository.
+    # Example: 'group/project'
     group = repository.split('/')[0]
 
     # Get repository ready to be used as :id in /project/:id.
     repository = urllib.parse.quote_plus(repository)
-
-    user = get_user(args.token, user_name)
-    member = get_member(args.token, group, user_name)
 
     response = request(requests.get, groups_endpoint(), {
         "access_token": args.token,
         "search": group
     })
 
+    # Is this target a repository inside of a group?
     is_group = len(json.loads(response.content.decode())) >= 1 and args.promote
 
-    promote(args.token, repository, group, is_group, user, member)
+    gitlab_member = get_member(args.token, group, user_name)
+    promote(args.token, repository, group,
+            is_group, gitlab_user, gitlab_member)
 
     issues_ep = issues_endpoint(repository)
     logging.info(f"Migrating task {task.get('id')} to {issues_ep}.")
@@ -651,12 +651,6 @@ def import_task(args, task, mappings):
         "access_token": args.token,
         "search": summary
     })
-
-    issues = [
-        i for i in json.loads(response.content.decode())
-        if i.get("title") == summary
-    ]
-    exists = len(issues) >= 1
 
     if args.keep_ids:
         # Make sure that no issue with the id exists.
@@ -675,15 +669,20 @@ def import_task(args, task, mappings):
                             "repository. Offending issue location: "
                             f"{_data[0].get('_links').get('self')}.")
 
+    issues = [
+        i for i in json.loads(response.content.decode())
+        if i.get("title") == summary
+    ]
+    exists = len(issues) >= 1
+
     if exists:
+        # NOTE: Bug! If we return an already created issue here,
+        # we will end up reprocessing it for dependencies.
         logging.error(
             "Issue with title '%s' already exists, skipping." % summary)
         return issues[0]
 
-    utc = pytz.timezone("UTC")
-    date_opened = datetime.fromtimestamp(task["last_edited"], utc) \
-        if task["last_edited"] > task["date_opened"] else \
-        datetime.fromtimestamp(task["date_opened"], utc)
+    date_opened = make_datetime(task.get("date_opened"))
 
     attachments = []
     if not args.skip_attachments:
@@ -703,13 +702,11 @@ def import_task(args, task, mappings):
         if _gitlab_user:
             assignees.append(_gitlab_user.get("id"))
 
-    ds = date_opened.astimezone(timezone.utc).isoformat() + "Z"
-    ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
     data = {
         "access_token": args.token,
         "title": task.get("summary"),
         "description": task_to_issue(args, task, attachments),
-        "created_at": ds,
+        "created_at": make_gitlab_time(date_opened),
         "weight": task.get("priority_id"),
         "confidential": bool(task.get("mark_private")),
         "assignee_ids": assignees
@@ -734,8 +731,7 @@ def import_task(args, task, mappings):
     import_comments(args, to_restore, to_remove, task, data,
                     repository, group, is_group, mappings)
 
-    date_closed = datetime.fromtimestamp(
-        int(task.get("date_closed")))
+    date_closed = make_datetime(task.get("date_closed"))
     if task.get("closed"):
         closed_by = task.get("closed_by")
         _user = get_user(args.token, closed_by.get("user_name"))
@@ -751,9 +747,7 @@ def import_task(args, task, mappings):
             }
 
             if is_group:
-                ds = date_closed.astimezone(timezone.utc).isoformat() + "Z"
-                ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
-                _data["created_at"] = ds
+                _data["created_at"] = make_gitlab_time(date_closed)
 
             headers = {
                 "Sudo": str(_user.get("id"))
@@ -768,11 +762,9 @@ def import_task(args, task, mappings):
             headers["Sudo"] = str(_user.get("id"))
 
         # Then close it by updating the issue's state to 'close'.
-        ds = date_closed.astimezone(timezone.utc).isoformat() + "Z"
-        ds = re.sub(r'\+\d{2}:\d{2}', '', ds)
         request(requests.put, issue_ep, json={
             "access_token": args.token,
-            "updated_at": ds,
+            "updated_at": make_gitlab_time(date_closed),
             "state_event": "close"
         }, headers=headers)
 
@@ -825,9 +817,7 @@ def command_import(args, tasks):
     while i < len(tasks):
         task = tasks[i]
         project = task.get("project")
-        repo = mappings.get(project, None)
-        if not repo:
-            repo = args.default_target
+        repo = mappings.get(project, args.default_target)
 
         try:
             issue = import_task(args, task, mappings)
