@@ -189,6 +189,8 @@ def get_issue(token, group, iid):
 
 
 def apply_dependencies(args, mappings, tasks, issues):
+    logging.info("Applying dependencies...")
+
     for task in tasks:
         project = task.get("project")
         repo = mappings.get(project, args.default_target)
@@ -209,13 +211,21 @@ def apply_dependencies(args, mappings, tasks, issues):
             data = {
                 "access_token": args.token,
                 "target_project_id": repo,
-                "target_issue_iid": issues.get(str(dep)).get("iid")
+                "target_issue_iid": issues.get(str(dep)).get("iid"),
+                # A 'link_type' of 'relates_to' is used here in our request.
+                # We want to use 'blocks' or 'is_blocked_by', however, when
+                # sending requests with those link_types, Gitlab returns
+                # successfully and creates an issue relationship with a
+                # 'relates_to' type.
+                "link_type": "relates_to"
             }
-            logging.info("Applying dependency '%s' to '%s'." % (
-                issues.get(str(dep)).get("title"),
-                issues.get(str(task_id)).get("title")
-            ))
-            logging.info(endpoint)
+
+            logging.info(
+                "Issue titled '%s' relates to '%s', applying relationship." % (
+                    issues.get(str(task_id)).get("title"),
+                    issues.get(str(dep)).get("title")
+                )
+            )
             request(requests.post, endpoint, json=data, headers=headers)
 
 
