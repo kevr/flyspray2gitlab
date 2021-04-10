@@ -42,6 +42,8 @@ dependencies = dict()
 
 tasks = list()
 
+username_mapping = dict()
+
 
 def request(fn, *args, **kwargs):
     response = fn(*args, **kwargs)
@@ -145,6 +147,9 @@ def get_users(token):
 
 def get_user(token, username):
     global gitlab_users
+
+    if username in username_mapping:
+        username = username_mapping.get(username).lower()
 
     if username not in gitlab_users:
         endpoint = users_endpoint() + f"?username={username}"
@@ -953,12 +958,40 @@ additional information:
                         help="keep task ids from Flyspray")
     parser.add_argument("--id-mapping-output",
                         help="task id to issue url mapping output file")
-    parser.add_argument("--dump-file", required=True, help="dump file")
+    parser.add_argument("-f", "--dump-file", required=True, help="dump file")
     parser.add_argument("--promote", default=False, action="store_const",
                         const=True, help="enable owner promotion")
+    username_help = "path to json mapping of Flyspray to Gitlab usernames"
+    parser.add_argument("--username-mapping", help=username_help)
     parser.add_argument("command", default='',
                         help="primary command (import)")
-    return parser.parse_args()
+
+    args = parser.parse_args()
+
+    global username_mapping
+    username_mapping = dict()
+
+    if args.username_mapping:
+        with open(args.username_mapping) as f:
+            username_mapping = json.load(f)
+
+    # Lowercase all the keys.
+    lower_keys = dict()
+    to_delete = list()
+
+    for k, v in username_mapping.items():
+        lower_k = k.lower()
+        if lower_k not in username_mapping:
+            lower_keys[lower_k] = v
+            to_delete.append(k)
+
+    for k, v in lower_keys.items():
+        username_mapping[k] = v
+
+    for k in to_delete:
+        del username_mapping[k]
+
+    return args
 
 
 def handle_args(args):
