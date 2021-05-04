@@ -148,17 +148,40 @@ def get_users(token):
 def get_user(token, username):
     global gitlab_users
 
+    # Make sure we're using lowercase usernames to avoid case sensitivity.
+    username = username.lower()
+
+    if username in gitlab_users:
+        return gitlab_users.get(username)
+
+    gitlab_username = None
     if username in username_mapping:
-        username = username_mapping.get(username).lower()
+        gitlab_username = username_mapping.get(username).lower()
+        logging.debug("Username mapping found for "
+                      f"'{username}' -> '{gitlab_username}'.")
 
-    if username not in gitlab_users:
-        endpoint = users_endpoint() + f"?username={username}"
-        response = requests.get(endpoint)
+    target = gitlab_username if gitlab_username else username
+    logging.debug(f"Looking up target user '{target}'...")
 
-        data = json.loads(response.content.decode())
-        if len(data):
-            gitlab_users[username] = data[0]
+    response = request(requests.get, users_endpoint(), params={
+        "access_token": token,
+        "search": target
+    })
+    data = json.loads(response.content.decode())
 
+    # Make sure we only include entries returned that exactly match.
+    data = [e for e in data if e["username"] == target]
+
+    # If we actually found a valid result after all of that,
+    # populate gitlab_users with it as a value to the original
+    # flyspray username.
+    if len(data):
+        gitlab_users[username] = data[0]
+        logging.debug(f"Found user: {gitlab_users.get(username)}.")
+    else:
+        logging.debug(f"Unable to locate user specified: '{target}'.")
+
+    # Return whichever user we have stored in our memo, otherwise None.
     return gitlab_users.get(username, None)
 
 
@@ -425,12 +448,12 @@ def close_comment(args, task, group_owned=False):
     if not get_user(args.token, user.get("user_name").lower()):
         commented_by = get_if(
             lambda: args.upstream,
-            f"[{user.get('name')} ({user.get('username')})]"
+            f"[{user.get('real_name')} ({user.get('user_name')})]"
             f"({args.upstream}/user/{user.get('id')})",
-            f"{user.get('name')} ({user.get('username')})")
+            f"{user.get('real_name')} ({user.get('user_name')})")
         if not group_owned:
             output += "<small> - </small>"
-        output += f"<small>Commented by {commented_by}</small>\n\n"
+        output += f"<small>Closed by {commented_by}</small>\n\n"
 
     comment = task.get("closure_comment")
     output += "\n\n**Additional comments about closing**\n\n" + comment + "\n"
@@ -564,7 +587,7 @@ def import_comments(args, to_restore, to_remove, task, issue, repo, group,
 
         # If the Flyspray comment's user's username is found in
         # the global gitlab users dictionary, set gitlab_user to it.
-        if _user_name not in gitlab_users:
+        if len(gitlab_users) and _user_name not in gitlab_users:
             _gitlab_user = get_user(args.token, _user_name)
         else:
             _gitlab_user = gitlab_users.get(_user_name)
@@ -751,10 +774,11 @@ def import_task(args, task, mappings):
         closed_by = task.get("closed_by")
         _user = get_user(args.token, closed_by.get("user_name"))
         closed_by_member = get_member(args.token, group,
-                                      closed_by.get("username"))
+                                      closed_by.get("user_name"))
 
         promote(args.token, repository, group, is_group,
                 closed_by, closed_by_member)
+
         if task.get("closure_comment"):
             _data = {
                 "access_token": args.token,
@@ -764,16 +788,18 @@ def import_task(args, task, mappings):
             if is_group:
                 _data["created_at"] = make_gitlab_time(date_closed)
 
-            headers = {
-                "Sudo": str(_user.get("id"))
-            }
+            headers = dict()
+
+            if _user:
+                headers["Sudo"] = str(_user.get("id"))
 
             # Add closure comment note.
             response = request(requests.post, notes_ep,
                                json=_data, headers=headers)
 
         headers = dict()
-        if get_user(args.token, _user.get("username").lower()):
+
+        if _user:
             headers["Sudo"] = str(_user.get("id"))
 
         # Then close it by updating the issue's state to 'close'.
