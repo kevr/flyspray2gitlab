@@ -776,8 +776,9 @@ def import_task(args, task, mappings):
         closed_by_member = get_member(args.token, group,
                                       closed_by.get("user_name"))
 
-        promote(args.token, repository, group, is_group,
-                closed_by, closed_by_member)
+        if _user:
+            promote(args.token, repository, group, is_group,
+                    _user, closed_by_member)
 
         if task.get("closure_comment"):
             _data = {
