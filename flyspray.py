@@ -183,23 +183,23 @@ def user_middleware(prefix, user):
 
 
 def task_middleware(prefix, task):
-    task["assignee"] = None
+    task["assignees"] = list()
     with connection.cursor() as cursor:
         sql = f"""
 SELECT task_id, user_id FROM {prefix}assigned
 WHERE task_id = %s
 """
         cursor.execute(sql, args=[task.get("id")])
-        result = cursor.fetchone()
+        results = cursor.fetchall()
 
-    if result:
+    for result in results:
         task_id, user_id = result
         sql = user_query(None, None, prefix, "WHERE user_id = %s")
         with connection.cursor() as cursor:
             cursor.execute(sql, args=[user_id])
             result = cursor.fetchone()
 
-        task["assignee"] = user_convert(result)
+        task["assignees"].append(user_convert(result))
 
     task["dependencies"] = [dep[1] for dep in get_dependencies(task)]
     return task
@@ -408,7 +408,24 @@ def main():
     users = get_target(args, args.database, args.prefix, "users")
     tasks = get_target(args, args.database, args.prefix, "tasks",
                        {u["id"]: u for u in users})
-    print(json.dumps(tasks, indent=2), end='')
+
+    unique = dict()
+    for i in range(len(tasks)):
+        task = tasks[i]
+        task_id = task.get("id")
+        if task_id not in unique:
+            unique[task_id] = task
+        else:
+            # This is hella nasty. We are nesting so hard. Make some
+            # helper functions for this, you lazy bum!
+            for assignee in task.get("assignees"):
+                assignee_id = assignee.get("id")
+                deduped = list(filter(lambda a: a.get("id") != assignee_id,
+                                      tasks[task_id].get("assignees")))
+                for assignee in deduped:
+                    unique[task_id]["assignees"].append(assignee)
+
+    print(json.dumps(list(unique.values()), indent=2), end='')
     return 0
 
 

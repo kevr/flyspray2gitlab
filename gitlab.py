@@ -402,20 +402,20 @@ def task_to_issue(args, task, attachments):
         ["Status", task.get("status")],
     ]
 
-    if task.get("assignee") and not get_user(args.token,
-                                             task.get("assignee")
-                                             .get("user_name")
-                                             .lower()):
-        # In this case, there is no assigned user to the Gitlab issue.
-        # Back-reference to the original user @ upstream.
-        assignee = task.get("assignee")
-        text = get_if(lambda: args.upstream,
-                      f"[{assignee.get('real_name')} "
-                      f"({assignee.get('user_name')})]"
-                      f"({args.upstream}/user/{assignee.get('id')})",
-                      f"{assignee.get('real_name')} "
-                      f"({assignee.get('user_name')})")
-        rows.append(["Assignee", text])
+    assigned = set()
+    for assignee in task.get("assignees"):
+        if not get_user(args.token, assignee.get("user_name").lower()) \
+                and assignee.get("id") not in assigned:
+            # In this case, there is no assigned user to the Gitlab issue.
+            # Back-reference to the original user @ upstream.
+            text = get_if(lambda: args.upstream,
+                          f"[{assignee.get('real_name')} "
+                          f"({assignee.get('user_name')})]"
+                          f"({args.upstream}/user/{assignee.get('id')})",
+                          f"{assignee.get('real_name')} "
+                          f"({assignee.get('user_name')})")
+            rows.append(["Assignee", text])
+            assigned.add(assignee.get("id"))
 
     table = raw_markdown_table(header, rows)
 
@@ -734,9 +734,8 @@ def import_task(args, task, mappings):
         headers["Sudo"] = str(gitlab_user.get("id"))
 
     assignees = []
-    if task.get("assignee"):
-        _gitlab_user = get_user(args.token,
-                                task.get("assignee").get("user_name").lower())
+    for assignee in task.get("assignees"):
+        _gitlab_user = get_user(args.token, assignee.get("user_name").lower())
         if _gitlab_user:
             assignees.append(_gitlab_user.get("id"))
 
