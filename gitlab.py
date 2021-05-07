@@ -958,12 +958,14 @@ additional information:
         usage="%(prog)s [-hv] [--skip-attachments] [-btmdua ARG] command",
         epilog=epilog)
 
+    default_token = os.environ.get("GITLAB_TOKEN", str())
+
     parser.add_argument("-v", "--verbose", default=False, const=True,
                         action="store_const", help="enable debug logging")
     parser.add_argument("-b", "--base", default="http://gitlab.local.net",
                         help="GitLab URL (default: 'http://gitlab.local.net')")
-    parser.add_argument("-t", "--token", required=True,
-                        help="GitLab migration user access token")
+    parser.add_argument("-t", "--token", default=default_token,
+                        help="GitLab access token ($GITLAB_TOKEN)")
     parser.add_argument("-m", "--project-mapping",
                         help="path to a project json mapping file " +
                         "(default: 'projects.map.json')")
@@ -993,6 +995,9 @@ additional information:
                         help="primary command (import)")
 
     args = parser.parse_args()
+
+    if not args.token:
+        return args
 
     global username_mapping
     username_mapping = dict()
@@ -1053,6 +1058,10 @@ def verify_arguments(args):
 def main():
     """ The main entry point. """
     args = handle_args(prepare_args())
+
+    if not args.token:
+        print("error: --token is required but not provided.")
+        return 1
 
     bad = verify_arguments(args)
     if bad:
