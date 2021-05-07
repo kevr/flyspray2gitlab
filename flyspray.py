@@ -421,7 +421,7 @@ def main():
             for assignee in task.get("assignees"):
                 assignee_id = assignee.get("id")
                 deduped = list(filter(lambda a: a.get("id") != assignee_id,
-                                      tasks[task_id].get("assignees")))
+                                      task.get("assignees")))
                 for assignee in deduped:
                     unique[task_id]["assignees"].append(assignee)
 
