@@ -43,9 +43,23 @@ dependencies = dict()
 tasks = list()
 
 username_mapping = dict()
+username_mapping_output = dict()
+
+dry_mappings = False
+
+
+class FakeResponse:
+    content = b""
+
+    def json(self):
+        return dict()
 
 
 def request(fn, *args, **kwargs):
+    if dry_mappings and fn in {requests.post, requests.put}:
+        # Return a fake "response," which is just an empty json dictionary.
+        return FakeResponse()
+
     response = fn(*args, **kwargs)
     if response.status_code not in (200, 201, 204):
         logging.error(response.content.decode())
@@ -146,13 +160,15 @@ def get_users(token):
 
 
 def get_user(token, username):
-    global gitlab_users
+    global gitlab_users, username_mapping_output
 
     # Make sure we're using lowercase usernames to avoid case sensitivity.
     username = username.lower()
 
     if username in gitlab_users:
-        return gitlab_users.get(username)
+        user = gitlab_users.get(username)
+        username_mapping_output[username] = user.get("username").lower()
+        return user
 
     gitlab_username = None
     if username in username_mapping:
@@ -177,8 +193,11 @@ def get_user(token, username):
     # flyspray username.
     if len(data):
         gitlab_users[username] = data[0]
+        username_mapping_output[username] = gitlab_users.get(
+            username).get("username").lower()
         logging.debug(f"Found user: {gitlab_users.get(username)}.")
     else:
+        username_mapping_output[username] = None
         logging.debug(f"Unable to locate user specified: '{target}'.")
 
     # Return whichever user we have stored in our memo, otherwise None.
@@ -906,7 +925,7 @@ def command_import(args, tasks):
 
     apply_dependencies(args, mappings, tasks, issues)
 
-    if args.id_mapping_output:
+    if not args.dry_mappings and args.id_mapping_output:
         with open(args.id_mapping_output, "w") as fh:
             json.dump(iid_mapping, fh, indent=2)
         logging.info(
@@ -991,6 +1010,11 @@ additional information:
                         const=True, help="enable owner promotion")
     username_help = "path to json mapping of Flyspray to Gitlab usernames"
     parser.add_argument("--username-mapping", help=username_help)
+    dry_mappings_help = "perform a dry run and produce username mappings "
+    dry_mappings_help += "we would have chosen"
+    parser.add_argument("--dry-mappings",
+                        default=False, action="store_const", const=True,
+                        help=dry_mappings_help)
     parser.add_argument("command", default='',
                         help="primary command (import)")
 
@@ -1036,7 +1060,14 @@ def handle_args(args):
         level = logging.DEBUG
         fmt = "%(asctime)s [%(levelname)5s] %(message)s"
 
-    logging.basicConfig(level=level, format=fmt, datefmt=date_fmt)
+    # Only setup logging if --dry-mappings is missing. This will silence
+    # logging to produce mapping json during a --dry-mappings run.
+    if not args.dry_mappings:
+        logging.basicConfig(level=level, format=fmt, datefmt=date_fmt)
+
+    global dry_mappings
+    dry_mappings = bool(args.dry_mappings)
+
     return args
 
 
@@ -1080,7 +1111,12 @@ def main():
     tasks = json.loads(stdin)
 
     method = module_method(args.command)
-    return method(args, tasks)
+    rc = method(args, tasks)
+
+    if args.dry_mappings:
+        print(json.dumps(username_mapping_output, indent=2))
+
+    return rc
 
 
 if __name__ == "__main__":
